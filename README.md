@@ -6,6 +6,12 @@ Built on the existing **Monex Turbo-style template**: npm workspaces, Turborepo,
 
 > Sign-in uses a **local mock OAuth provider** with state and PKCE. It does not connect to ThaiD, Google, or another real identity provider. Mock authentication is disabled in production mode.
 
+## Project documentation
+
+Read the [complete documentation index](doc/README.md) for architecture, authentication, authorization and UI capabilities, retail workflows, the full database schema, API contracts, frontend behavior, setup/testing, risks, and a staged improvement roadmap.
+
+Start with the [project overview](doc/01-project-overview.md), inspect the [schema and ERD](doc/06-database-schema.md), or review the [current limitations](doc/10-risks-and-limitations.md). The [short demo walkthrough](RETAIL_DEMO.md) covers the hands-on flow.
+
 ## Screenshots
 
 These screenshots show the running app with seeded demonstration data. Totals and stock change as you use the demo.
