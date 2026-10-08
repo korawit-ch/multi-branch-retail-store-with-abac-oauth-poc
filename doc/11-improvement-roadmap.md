@@ -35,13 +35,13 @@ Acceptance criteria: startup rejects missing/malformed required settings; all lo
 
 Addresses R1/R8. Keep mock personas behind explicit development configuration. Add a real provider adapter at the existing auth boundary rather than coupling identity logic to retail services. Map stable issuer/subject identity to local User, with deliberate onboarding and account deactivation behavior.
 
-Define provider response validation, state/PKCE and any OIDC checks, bounded timeouts, durable one-time flow state, session expiry/revocation, key rotation, and cleanup. Do not select or promise provider-specific behavior without reviewing that provider's contract.
+Define provider response validation, state/PKCE and any OIDC checks, bounded timeouts, durable one-time flow state, session expiry/revocation, JWT/key rotation, and cleanup. Preserve the BFF cookie-to-token boundary. Do not select or promise provider-specific behavior without reviewing that provider's contract.
 
 Acceptance criteria: no persona-based login path works in deployed mode; identity tests cover invalid/expired/replayed responses and restart/multiple-instance behavior; logout/revocation works across instances; authenticated users still require resource authorization.
 
 ### Close authorization contract gaps
 
-Addresses R5/R6/R12. Decide the intended relationship between store.read and order.read. Extend resource capabilities to stock adjustment, sale, and order transitions where eligibility is resource-dependent. Each capability must derive from the same server policy used by its write.
+Addresses R5/R6/R12. Decide the intended relationship between store.read and order.read. Extend resource capabilities to stock adjustment, sale, and order transitions where eligibility is resource-dependent. Each capability must derive from the same server policy used by its write. Add the named permission to the shared `can()` vocabulary and both BFF and Nest route checks.
 
 Return stable reason codes alongside human-readable messages if the frontend needs localization or differentiated UX. Keep explanations from leaking inaccessible resource details. Do not expose a request parameter that bypasses backend policy.
 

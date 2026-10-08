@@ -3,6 +3,7 @@ import { ForbiddenException, Injectable } from '@nestjs/common';
 import { OrderStatus, RoleCode, type Prisma } from '@repo/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from '../auth/auth.types';
+import { can, type Permission } from '@repo/authorization';
 
 @Injectable()
 export class OrdersService {
@@ -71,7 +72,7 @@ export class OrdersService {
     ] as const;
     const examples = await Promise.all(
       checks.map(async ([label, permission, id]) => {
-        if (!actor.permissions.includes(permission))
+        if (!can(actor, permission))
           return { label, allowed: false, reason: 'Role lacks permission' };
         const where =
           permission === 'order.refund'
@@ -101,8 +102,8 @@ export class OrdersService {
     };
   }
 
-  private requirePermission(actor: AuthenticatedActor, permission: string) {
-    if (!actor.permissions.includes(permission))
+  private requirePermission(actor: AuthenticatedActor, permission: Permission) {
+    if (!can(actor, permission))
       throw new ForbiddenException('Role lacks permission');
   }
 

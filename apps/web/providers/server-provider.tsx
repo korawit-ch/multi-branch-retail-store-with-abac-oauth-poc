@@ -8,7 +8,7 @@ interface ServerConfig {
 
 function getServerConfig(): ServerConfig {
   return {
-    apiUrl: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001',
+    apiUrl: '/api/bff',
     environment: process.env.NODE_ENV || 'development',
     version: '1.0.0',
   };

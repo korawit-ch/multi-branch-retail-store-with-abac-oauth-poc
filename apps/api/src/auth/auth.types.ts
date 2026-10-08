@@ -1,6 +1,7 @@
 import type { RoleCode } from '@repo/prisma';
+import type { AuthorizationContext } from '@repo/authorization';
 
-export type AuthenticatedActor = {
+export type AuthenticatedActor = AuthorizationContext & {
   id: string;
   name: string;
   tenantId: string;
@@ -8,6 +9,4 @@ export type AuthenticatedActor = {
   refundLimit: number;
   customerId: string | null;
   role: RoleCode;
-  permissions: string[];
-  storeIds: string[];
 };

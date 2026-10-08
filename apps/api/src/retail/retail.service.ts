@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@repo/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from '../auth/auth.types';
+import { can, type Permission } from '@repo/authorization';
 import type { AdjustStockDto, CreateSaleDto } from './retail.dto';
 
 @Injectable()
@@ -22,8 +23,8 @@ export class RetailService {
     };
   }
 
-  private require(actor: AuthenticatedActor, permission: string) {
-    if (!actor.permissions.includes(permission))
+  private require(actor: AuthenticatedActor, permission: Permission) {
+    if (!can(actor, permission))
       throw new ForbiddenException('Your role cannot perform this action');
   }
 

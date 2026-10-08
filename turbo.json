@@ -6,6 +6,7 @@
     "AUTH_COOKIE_SECRET",
     "API_PORT",
     "API_PUBLIC_URL",
+    "API_INTERNAL_URL",
     "DATABASE_URL",
     "WEB_ORIGIN",
     "WEB_URL"

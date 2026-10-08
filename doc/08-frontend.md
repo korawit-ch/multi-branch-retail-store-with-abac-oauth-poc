@@ -6,15 +6,15 @@
 
 The app uses Next.js App Router. The [home page](<../apps/web/app/(home)/page.tsx>) is a server-rendered persona selection page that reads the login error query. The [dashboard page](../apps/web/app/dashboard/page.tsx) renders [StoreDashboard](../apps/web/components/store-dashboard.tsx), a Client Component because it uses local state, forms, queries, and mutations.
 
-The dashboard page does not itself perform an authenticated server redirect. It loads protected data through the API and shows a loading or error screen. A customer receives no retail data because the API denies `store.read`, even if the page shell is reachable.
+The dashboard page does not itself perform an authenticated server redirect. It loads protected data through the same-origin Next BFF and shows a loading or error screen. A customer receives no retail data because Next and Nest deny `store.read`, even if the page shell is reachable.
 
 The root layout/providers install shared styling and the query provider. Reusable components live in `packages/ui`; catalog and permission rules remain in the API rather than browser components.
 
 ## Transport and contracts
 
-[clientFetch](../apps/web/lib/fetch/client.ts) executes descriptors from `@repo/api-client`, includes cookies, and parses JSON. HTTP failures become `ApiError(status, message, responseBody)`; network errors do not have an HTTP status. The [server fetch helper](../apps/web/lib/fetch/server.ts) forwards cookies for server-side calls and uses `cache: 'no-store'`.
+[clientFetch](../apps/web/lib/fetch/client.ts) executes descriptors from `@repo/api-client` through same-origin `/api/bff`, includes the opaque cookie, and parses JSON. HTTP failures become `ApiError(status, message, responseBody)`; network errors do not have an HTTP status. The [server fetch helper](../apps/web/lib/fetch/server.ts) calls the same BFF with forwarded cookies for server-side use and uses `cache: 'no-store'`.
 
-The client fetch base prefers `NEXT_PUBLIC_API_URL`, then `NEXT_PUBLIC_API`. Home login links prefer `API_PUBLIC_URL`, then `NEXT_PUBLIC_API`. Dashboard logout forms use `NEXT_PUBLIC_API`. Configure these consistently; setting only the newer `_URL` variable can make fetch and navigation target different API hosts.
+Home login links and dashboard logout forms use same-origin `/auth/*` routes. Client fetch uses `/api/bff`. Next calls Nest using private `API_INTERNAL_URL`; the browser does not read it. Keep `WEB_URL` and `WEB_ORIGIN` aligned with the browser origin.
 
 Public Next environment variables belong in browser configuration, never in secret storage. The browser must not import the Prisma client runtime, even though Prisma types are available through workspace dependencies.
 
@@ -34,9 +34,9 @@ Refunds use their own mutation so the demo can show the endpoint, status, and JS
 
 ## Permission-aware controls
 
-Inventory/sale controls use `actor.permissions`. Order preparation controls also inspect PAID/PREPARING status. Refunds consume `order.capabilities.refund.allowed` and the backend explanation.
+Inventory/sale controls use shared `can()` with the returned actor. Order preparation controls also inspect PAID/PREPARING status. Refunds consume `order.capabilities.refund.allowed` and the backend explanation.
 
-The override checkbox only bypasses the refund button's eligibility-based disabled condition. Busy state remains enforced. It sends no elevated permission to the server. Branch changes reset the checkbox and result; page reloads reset all component-local state. See the [capability guide](04-authorization-and-capabilities.md).
+The override checkbox only bypasses the refund button's eligibility-based disabled condition. Busy state remains enforced. It sends no elevated permission to either server. A missing permission is denied by the BFF; Nest independently checks direct bearer calls. Branch changes reset the checkbox and result; page reloads reset all component-local state. See the [capability guide](04-authorization-and-capabilities.md).
 
 The display currently hardcodes successful refund status 201. Error status comes from the real HTTP response. A future fetch result envelope would let the success panel report actual transport metadata too.
 
@@ -48,8 +48,8 @@ A production UX pass should verify dialog focus entry/return and trapping, Escap
 
 ## Safe extension pattern
 
-1. Define the authoritative behavior and validation in the API.
-2. Update the shared endpoint/body/response contract.
+1. Define the permission in the shared authorization vocabulary and the authoritative business behavior/validation in Nest.
+2. Add an explicit BFF route permission and an independent Nest check; update the shared endpoint/body/response contract.
 3. Use the existing fetch helper and query provider.
 4. Keep temporary form state local; invalidate the relevant server query after writes.
 5. Add resource capabilities when an action's eligibility depends on more than a simple permission.

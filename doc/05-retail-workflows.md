@@ -6,7 +6,7 @@ The principal implementation is [RetailService](../apps/api/src/retail/retail.se
 
 ## Opening the workspace
 
-`GET /retail` authenticates, requires `store.read`, and selects only assigned stores in the actor's tenant and region. Each store contains its branch-product listings with catalog details, latest 50 orders with items, and latest 15 audit events. A second batched query computes refund capabilities.
+`GET /api/bff/retail` exchanges the session for a JWT, checks `store.read` in Next and Nest, and selects only assigned stores in the actor's tenant and region. Each store contains its branch-product listings with catalog details, latest 50 orders with items, and latest 15 audit events. A second batched query computes refund capabilities.
 
 Money is converted from Prisma Decimal to JSON numbers; timestamps serialize as strings. The dashboard response includes the actor and permissions. Store/product lists are not paginated. The included orders and capability query are separate reads, so they are not guaranteed to represent one database snapshot. Execution-time checks remain necessary.
 
@@ -18,7 +18,7 @@ The client sends only a branch-product ID and quantity:
 { "storeProductId": "10-coffee", "quantity": 2 }
 ```
 
-The controller checks the trusted origin and session. The DTO requires a product ID of 1–100 characters and integer quantity 1–1000. The service requires `order.create` and opens a transaction:
+Next and Nest check the trusted origin. Next exchanges the opaque cookie and checks `order.create`; Nest verifies the bearer JWT and active session. The DTO requires a product ID of 1–100 characters and integer quantity 1–1000. The service requires `order.create` and opens a transaction:
 
 1. Find the branch-product in an authorized store, with `isAvailable = true`, and an active product belonging to the tenant.
 2. Read price and product name from the database.
@@ -48,7 +48,7 @@ A transaction does not make a repeated HTTP request idempotent. If a sale commit
 
 ## Adjusting stock
 
-`POST /retail/inventory/:id/adjust` requires `inventory.adjust`, a nonzero integer delta from -10000 to 10000, and a reason string of 3–120 characters. The service rejects a whitespace-only reason and stores its trimmed form. The DTO's length check happens before trimming, so it does not guarantee three meaningful characters.
+`POST /api/bff/retail/inventory/:id/adjust` requires `inventory.adjust` at both server layers, a nonzero integer delta from -10000 to 10000, and a reason string of 3–120 characters. The service rejects a whitespace-only reason and stores its trimmed form. The DTO's length check happens before trimming, so it does not guarantee three meaningful characters.
 
 Within one transaction, the service finds the scoped listing, increments stock conditionally, writes the movement, and writes the audit event. For a negative delta, stock must cover the absolute decrement. Insufficient stock produces 400; an unavailable scoped listing produces 403.
 
@@ -65,7 +65,7 @@ stateDiagram-v2
   PAID --> REFUNDED: Separate refund operation
 ```
 
-`PATCH /orders/:id` requires `order.update_status` and an assigned branch. The status DTO accepts the OrderStatus enum, including REFUNDED, but the service allows only PAID → PREPARING and PREPARING → READY. A PATCH cannot perform a refund or skip directly from PAID to READY.
+`PATCH /api/bff/orders/:id` requires `order.update_status` at both server layers and an assigned branch. The status DTO accepts the OrderStatus enum, including REFUNDED, but the service allows only PAID → PREPARING and PREPARING → READY. A PATCH cannot perform a refund or skip directly from PAID to READY.
 
 The update predicate includes the previous status. A competing transition that wins first causes the later update to affect zero rows and return 403. READY and REFUNDED are terminal in this implementation. Status changes do not create audit events or stock movements.
 
@@ -83,7 +83,7 @@ This operation has no payment-provider call, refund record, reason, amount, part
 - **Application rules:** tenant/region consistency, assigned branch, role grants, sale total calculation, and the order state machine.
 - **Not enforced globally:** total equals the sum of items; every order has items; stock equals movement sum; tenant consistency across related records; append-only audit history.
 
-Legacy seeded orders intentionally demonstrate some of these differences. Administrative SQL or new writers must preserve application invariants explicitly. Authentication also precedes the service transaction, so an already-running request may finish after a grant is revoked.
+Legacy seeded orders intentionally demonstrate some of these differences. Administrative SQL or new writers must preserve application invariants explicitly. JWT/session verification also precedes the service transaction, so an already-running request may finish after a grant is revoked.
 
 ## Failure and recovery
 

@@ -6,6 +6,7 @@ import { RetailService } from './retail.service';
 
 const actor: AuthenticatedActor = {
   id: 'manager',
+  userId: 'manager',
   name: 'Manager',
   role: 'STORE_MANAGER',
   tenantId: 'thai-food',

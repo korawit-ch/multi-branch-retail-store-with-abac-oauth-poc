@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from './auth.types';
 import type { SessionCookie } from './auth-flow.types';
 import { hashToken, open, randomSecret, seal } from './auth.crypto';
+import { isPermission } from '@repo/authorization';
 
 @Injectable()
 export class SessionService {
@@ -28,6 +29,10 @@ export class SessionService {
   async authenticate(
     cookieHeader: string | undefined,
   ): Promise<AuthenticatedActor> {
+    return (await this.authenticateSession(cookieHeader)).actor;
+  }
+
+  async authenticateSession(cookieHeader: string | undefined) {
     const session = this.readSessionCookie(
       this.readCookie(cookieHeader, 'app_session'),
     );
@@ -55,19 +60,21 @@ export class SessionService {
     }
 
     const user = stored.user;
-    return {
+    const actor: AuthenticatedActor = {
       id: user.id,
+      userId: user.id,
       name: user.name,
       tenantId: user.tenantId,
       region: user.region,
       refundLimit: Number(user.refundLimit),
       customerId: user.customerId,
       role: user.role.code,
-      permissions: user.role.permissions.map(
-        ({ permission }) => permission.code,
-      ),
+      permissions: user.role.permissions
+        .map(({ permission }) => permission.code)
+        .filter(isPermission),
       storeIds: user.assignedStores.map(({ storeId }) => storeId),
     };
+    return { actor, sessionHash: hashToken(session.token) };
   }
 
   async revokeCurrentSession(cookieHeader: string | undefined) {

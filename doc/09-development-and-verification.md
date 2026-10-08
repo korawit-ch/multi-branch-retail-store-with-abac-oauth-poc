@@ -42,14 +42,14 @@ Default URLs are web `http://localhost:3000`, API `http://localhost:3001`, Swagg
 - `DB_CONTAINER_NAME`: local container identity; use a distinct value to avoid conflicts.
 - `DATABASE_URL`: authoritative Prisma connection string. The initial setup script expands template defaults; changing DB\_\* later does not automatically rewrite an existing URL. Keep them aligned explicitly.
 - `API_PORT`: API listening port.
-- `API_PUBLIC_URL`: browser-facing API/callback address and server-side mock token exchange base.
-- `NEXT_PUBLIC_API`: browser API address used across the existing UI. `NEXT_PUBLIC_API_URL` is additionally supported by fetch helpers but not consistently by all login/logout navigation.
-- `WEB_ORIGIN`: CORS origin and retail/order mutation Origin allowlist.
+- `API_INTERNAL_URL`: private NestJS address used by Next and the API mock-code exchange; local fallback is `http://localhost:${API_PORT || 3001}`.
+- `API_PUBLIC_URL`, `NEXT_PUBLIC_API`, `NEXT_PUBLIC_API_URL`: legacy/template settings. Protected browser calls now use same-origin `/api/bff`; auth redirects use `WEB_URL`/`WEB_ORIGIN`.
+- `WEB_ORIGIN`: browser-facing origin used for BFF and Nest mutation Origin allowlists; Nest no longer enables credentialed browser CORS.
 - `WEB_URL`: auth redirect target and preferred logout Origin comparison; keep equal to the intended web origin.
 - `NODE_ENV`: mock authentication is disabled only for exact `production`.
-- `AUTH_COOKIE_SECRET`: random base64url-encoded material of at least 32 bytes.
+- `AUTH_COOKIE_SECRET`: random base64url-encoded material of at least 32 bytes, shared privately by Next and Nest for purpose-separated cookie, internal exchange, and JWT keys.
 
-Do not copy real secret values into documentation, screenshots, commits, or shell output. Next public variables are visible to browsers and usually need the intended values when building the frontend.
+Do not copy real secret values into documentation, screenshots, commits, or shell output. Next public variables are visible to browsers. `API_INTERNAL_URL` and `AUTH_COOKIE_SECRET` must remain server-only.
 
 The [distribution script](../scripts/distribute-env.js) replaces regular workspace `.env` files with symlinks to the root file for apps and most packages. Keep local settings at the root; preserve any workspace-specific file before intentionally running this script. Shared config packages are excluded.
 
@@ -88,13 +88,13 @@ The root `npm run lint` also performs a broad Prettier check. For documentation-
 
 ### Unit tests
 
-API unit suites cover mock state/PKCE/code replay and production guard, session hashing/revocation, order scopes/refund predicates and stale decisions, retail permission/stock/price behavior, and basic template controllers/services. Several use mocked Prisma calls, which verify service decisions but do not prove actual PostgreSQL constraints or concurrency.
+API unit suites cover mock state/PKCE/code replay and production guard, session hashing/revocation, access-token exchange/signature/expiry/revocation, order scopes/refund predicates and stale decisions, retail permission/stock/price behavior, and basic template controllers/services. Several use mocked Prisma calls, which verify service decisions but do not prove actual PostgreSQL constraints or concurrency.
 
-The web suite currently covers FeatureBadge. It does not exercise the dashboard's refund checkbox, dialogs, error rendering, query invalidation, or accessibility. Test file presence does not establish coverage of those workflows.
+The web suite covers FeatureBadge and the BFF route allowlist. It does not exercise the dashboard's refund checkbox, dialogs, error rendering, query invalidation, or accessibility. Test file presence does not establish coverage of those workflows.
 
 ### Live retail integration script
 
-[scripts/test-retail.mjs](../scripts/test-retail.mjs) requires a running seeded development API and real database. It follows mock login redirects, checks unauthenticated access, branch scope, denied writes, input/origin validation, negative-stock rejection, receipt snapshots, capability denials, order transitions, and session revocation.
+[scripts/test-retail.mjs](../scripts/test-retail.mjs) requires running Next.js and NestJS servers plus a seeded real development database. It follows mock login through Next, checks BFF and direct Nest authentication/authorization, branch scope, denied writes, input/origin validation, negative-stock rejection, receipt snapshots, capability denials, order transitions, and session revocation.
 
 Its concurrency scenario sets coffee stock to one, sends two sale requests, and expects one 201 and one 400. It restores the original stock in a finally block, but leaves the created order, movement history, and audit entries. It also creates sessions and normally revokes its own sessions. It is not a read-only health check or a fully isolated rollback test. Use only a disposable/local demo database.
 
@@ -110,9 +110,9 @@ The inspected checkout has `main` tracking `origin/main`; recent history uses `f
 
 ## Troubleshooting by symptom
 
-- **Login fails:** confirm a seeded user, working database, valid cookie secret, development mode, matching API callback URL, and reachable self-token-exchange endpoint. Inspect server errors without logging cookies or tokens.
+- **Login fails:** confirm a seeded user, working database, valid cookie secret, development mode, matching Next callback URL and reachable private mock-token-exchange endpoint. Inspect server errors without logging cookies or tokens.
 - **Mutation gets 403:** distinguish incorrect Origin, missing permission, wrong tenant/region/branch, refund limit, and invalid/stale state. Check the response message and current actor/capability.
-- **Fetch fails but login works:** compare all API environment variables; login and fetch currently use different fallback orders. Confirm browser origin and CORS credentials settings.
+- **Fetch fails but login works:** confirm both servers have the same private cookie secret, Next can reach `API_INTERNAL_URL`, and `WEB_URL`/`WEB_ORIGIN` match the browser origin. Browser retail fetches must target `/api/bff`.
 - **Workspace/package import fails:** build shared packages; many exports point at `dist` rather than source.
 - **Database constraint differs from this guide:** inspect applied migrations. Generating the client or using db push alone is not evidence that SQL CHECKs exist.
 - **Dashboard seems stale:** focus refetch is disabled; refetch the retail query or reload. Other users' changes are not pushed live.

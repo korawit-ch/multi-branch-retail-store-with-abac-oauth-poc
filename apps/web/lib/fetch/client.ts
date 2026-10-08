@@ -11,10 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API ||
-  'http://localhost:3001';
+const API_BASE_URL = '/api/bff';
 
 /**
  * Helper type that represents either an endpoint with or without a body

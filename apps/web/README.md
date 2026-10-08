@@ -1,29 +1,16 @@
-# Getting Started
+# Next.js web app and BFF
 
-First, run the development server:
+This app renders the store-management UI and owns the browser-facing API boundary. Start with the [project README](../../README.md) for setup and the [BFF architecture guide](../../doc/12-bff-authentication-architecture.md) for the complete request flow.
+
+From the repository root, build shared packages and start the app:
 
 ```bash
-pnpm dev
-# Also works with NPM, YARN, BUN, ...
+npm run build
+npm run dev --workspace=web
 ```
 
-Browse [localhost:3001](http://localhost:3001) to see the result.
+The web app defaults to `http://localhost:3000`. Set `WEB_URL` and `WEB_ORIGIN` to the actual browser origin, and configure `API_INTERNAL_URL` if Nest is not at the local `API_PORT`. Next and Nest must share the private `AUTH_COOKIE_SECRET` value; never expose it through a `NEXT_PUBLIC_` setting.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Browser API calls use the same-origin `/api/bff` routes. Next exchanges the HttpOnly `app_session` cookie for a 60-second access JWT, verifies it, checks the shared `can()` policy, and forwards allowed requests to Nest with a bearer token. The BFF has an explicit method/path allowlist. Nest independently verifies the token and session and applies resource rules. Auth redirects and logout also pass through Next so cookies stay on the web origin.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-Learn more about `Next.js` with the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See the [frontend guide](../../doc/08-frontend.md) for fetch and UI behavior, and [AUTH_DEMO.md](AUTH_DEMO.md) for the local login walkthrough. The mock provider is disabled in production and has no replacement in this repository.

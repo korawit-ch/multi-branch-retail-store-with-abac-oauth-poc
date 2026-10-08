@@ -1,26 +1,16 @@
-# With-NestJs | API
+# NestJS API
 
-## Getting Started
+This app owns the mock OAuth authorization-code flow, PostgreSQL-backed application sessions, access-token issuance and verification, and retail domain writes. Start with the [project README](../../README.md) for setup and the [BFF architecture guide](../../doc/12-bff-authentication-architecture.md) for request flow and trust boundaries.
 
-First, run the development server:
+Build shared packages from the repository root before running the API alone:
 
 ```bash
-pnpm run dev
-# Also works with NPM, YARN, BUN, ...
+npm run build
+npm run dev --workspace=api
 ```
 
-By default, your server will run at [localhost:3000](http://localhost:3000). You can use your favorite API platform like [Insomnia](https://insomnia.rest/) or [Postman](https://www.postman.com/) to test your APIs
+`API_PORT` controls the listener (default `3001`). Next.js reaches it at `API_INTERNAL_URL`, which defaults to `http://localhost:${API_PORT || 3001}`. The browser uses the Next.js `/api/bff` route for protected requests. Direct retail and order requests to Nest require a bearer access JWT; an `app_session` cookie alone is not accepted. The internal `POST /auth/access-token` exchange requires both that cookie and the server-derived BFF key.
 
-You can start editing the demo **APIs** by modifying [linksService](./src/links/links.service.ts) provider.
+Protected controllers verify the JWT and active database session on every request. Services enforce tenant, region, assigned-store, customer ownership, and mutable business conditions through scoped queries and transactions. The legacy Links scaffold is public and should not be copied as a protected-route pattern.
 
-### Important Note 🚧
-
-If you plan to `build` or `test` the app. Please make sure to build the `packages/*` first.
-
-## Learn More
-
-Learn more about `NestJs` with following resources:
-
-- [Official Documentation](https://docs.nestjs.com) - A progressive Node.js framework for building efficient, reliable and scalable server-side applications.
-- [Official NestJS Courses](https://courses.nestjs.com) - Learn everything you need to master NestJS and tackle modern backend applications at any scale.
-- [GitHub Repo](https://github.com/nestjs/nest)
+The mock persona login works only outside `NODE_ENV=production`; this repository has no production identity-provider adapter. See [authentication and sessions](../../doc/03-authentication-and-sessions.md), the [API reference](../../doc/07-api-reference.md), and [development and verification](../../doc/09-development-and-verification.md).

@@ -1,9 +1,10 @@
 import { OrderStatus, type Prisma, type PrismaClient } from '@repo/prisma';
 import type { AuthenticatedActor } from '../auth/auth.types';
+import { can } from '@repo/authorization';
 
 // One SQL policy supplies both read-time capabilities and atomic write conditions.
 export function refundPolicy(actor: AuthenticatedActor) {
-  const permitted = actor.permissions.includes('order.refund');
+  const permitted = can(actor, 'order.refund');
   const reason = permitted
     ? 'Refund requires a paid order in your assigned branch within your refund limit.'
     : 'Your role does not have order.refund permission.';

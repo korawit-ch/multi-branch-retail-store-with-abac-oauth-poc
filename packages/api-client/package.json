@@ -27,6 +27,7 @@
     "lint": "eslint . --max-warnings 0"
   },
   "dependencies": {
+    "@repo/authorization": "*",
     "@repo/prisma": "*"
   },
   "devDependencies": {

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ordersApi, retailApi } from '@repo/api-client';
+import { can as canPerform, type Permission } from '@repo/authorization';
 import { Button } from '@repo/ui/button';
 import { ApiError, clientFetch } from '../lib/fetch/client';
 
@@ -11,7 +12,6 @@ const money = (n: number) =>
   new Intl.NumberFormat('en-TH', { style: 'currency', currency: 'THB' }).format(
     n,
   );
-const api = process.env.NEXT_PUBLIC_API || 'http://localhost:3001';
 const sections = [
   'Overview',
   'Inventory',
@@ -101,7 +101,7 @@ export function StoreDashboard() {
     );
   const { actor, stores } = query.data;
   const store = stores.find((s) => s.id === branch) || stores[0];
-  const can = (permission: string) => actor.permissions.includes(permission);
+  const can = (permission: Permission) => canPerform(actor, permission);
   const products =
     store?.products.filter((p) =>
       `${p.product.name} ${p.product.sku}`
@@ -246,7 +246,7 @@ export function StoreDashboard() {
             <small>{actor.role.replaceAll('_', ' ').toLowerCase()}</small>
           </div>
         </div>
-        <form action={`${api}/auth/logout`} method="post">
+        <form action={'/auth/logout'} method="post">
           <button className="logout">Sign out ↗</button>
         </form>
       </aside>
@@ -453,8 +453,8 @@ export function StoreDashboard() {
                     </label>
                     <p>
                       The checkbox changes the UI only. Click a denied refund to
-                      see the backend response. Allowed refunds still change the
-                      order.
+                      see the BFF denial. NestJS also checks direct API calls.
+                      Allowed refunds still change the order.
                     </p>
                     {refundResult && (
                       <div role="status" className="backend-response">
@@ -576,13 +576,15 @@ export function StoreDashboard() {
                     {stores.map((s) => s.name).join(', ')}.
                   </p>
                   <div className="permission-list">
-                    {[
-                      'store.read',
-                      'order.read',
-                      'order.create',
-                      'order.update_status',
-                      'inventory.adjust',
-                    ].map((p) => (
+                    {(
+                      [
+                        'store.read',
+                        'order.read',
+                        'order.create',
+                        'order.update_status',
+                        'inventory.adjust',
+                      ] as Permission[]
+                    ).map((p) => (
                       <div key={p}>
                         <code>{p}</code>
                         <span className={`pill ${can(p) ? 'green' : ''}`}>
@@ -595,7 +597,7 @@ export function StoreDashboard() {
                     The API checks permissions and branch scope on every
                     request. Choosing a branch never grants extra access.
                   </p>
-                  <form action={`${api}/auth/logout-all`} method="post">
+                  <form action={'/auth/logout-all'} method="post">
                     <Button variant="secondary" type="submit">
                       Sign out on all devices
                     </Button>

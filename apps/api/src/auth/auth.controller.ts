@@ -3,6 +3,8 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Header,
+  Headers,
   Post,
   Query,
   Req,
@@ -11,6 +13,7 @@ import {
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
+import { AccessTokenService } from './access-token.service';
 
 const cookieOptions = 'HttpOnly; SameSite=Lax; Path=/';
 const secure = () => (process.env.NODE_ENV === 'production' ? '; Secure' : '');
@@ -25,11 +28,13 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly sessions: SessionService,
+    private readonly accessTokens: AccessTokenService,
   ) {}
 
   private apiUrl(request: Request) {
     return (
-      process.env.API_PUBLIC_URL ||
+      process.env.WEB_URL ||
+      process.env.WEB_ORIGIN ||
       `${request.protocol}://${request.get('host')}`
     );
   }
@@ -107,15 +112,22 @@ export class AuthController {
       : null;
     const tokenResponse =
       attempt && code
-        ? await fetch(`${apiUrl}/mock-provider/token`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              code,
-              codeVerifier: attempt.verifier,
-              redirectUri: `${apiUrl}/auth/callback`,
-            }),
-          }).catch(() => null)
+        ? await fetch(
+            new URL(
+              '/mock-provider/token',
+              process.env.API_INTERNAL_URL ||
+                `http://localhost:${process.env.API_PORT || 3001}`,
+            ),
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                code,
+                codeVerifier: attempt.verifier,
+                redirectUri: `${apiUrl}/auth/callback`,
+              }),
+            },
+          ).catch(() => null)
         : null;
     const identity = tokenResponse?.ok
       ? ((await tokenResponse.json()) as {
@@ -140,6 +152,15 @@ export class AuthController {
         ? `${this.webUrl()}/dashboard`
         : `${this.webUrl()}/?error=login_failed`,
     );
+  }
+
+  @Post('auth/access-token')
+  @Header('Cache-Control', 'no-store')
+  accessToken(
+    @Headers('cookie') cookie: string | undefined,
+    @Headers('x-bff-key') exchangeKey: string | undefined,
+  ) {
+    return this.accessTokens.exchange(cookie, exchangeKey);
   }
 
   @Post('auth/logout')

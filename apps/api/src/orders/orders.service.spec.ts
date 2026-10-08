@@ -6,6 +6,7 @@ import { OrdersService } from './orders.service';
 
 const actor: AuthenticatedActor = {
   id: 'mock-manager-10',
+  userId: 'mock-manager-10',
   name: 'Store 10 manager',
   tenantId: 'thai-food',
   region: 'TH',

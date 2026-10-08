@@ -35,10 +35,6 @@ export default async function Home({
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
-  const api =
-    process.env.API_PUBLIC_URL ||
-    process.env.NEXT_PUBLIC_API ||
-    'http://localhost:3001';
   return (
     <main className="login-page">
       <section className="login-story">
@@ -91,7 +87,7 @@ export default async function Home({
           {personas.map((p) => (
             <Link
               key={p.id}
-              href={`${api}/auth/login?persona=${p.id}`}
+              href={`/auth/login?persona=${p.id}`}
               className="persona"
             >
               <div className="avatar">{p.initials}</div>

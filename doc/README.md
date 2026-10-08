@@ -1,6 +1,6 @@
 # Project documentation
 
-This documentation describes **Branch & Co**, the multi-branch retail and authorization demonstration implemented in this repository. It was checked against the source on **2026-10-06**, starting from commit `cce8456`. It describes the implementation, not a production certification. Proposed changes are explicitly separated from existing behavior.
+This documentation describes **Branch & Co**, the multi-branch retail and authorization demonstration implemented in this repository. It was checked against the source on **2026-10-09**. It describes the implementation, not a production certification. Proposed changes are explicitly separated from existing behavior.
 
 ## Reading paths
 
@@ -23,6 +23,7 @@ This documentation describes **Branch & Co**, the multi-branch retail and author
 9. [Development and verification](09-development-and-verification.md): setup, environment, commands, tests, CI, troubleshooting, and repository workflow.
 10. [Risks and limitations](10-risks-and-limitations.md): source-supported findings, their consequences, and verification gaps.
 11. [Improvement roadmap](11-improvement-roadmap.md): staged recommendations with concrete acceptance criteria.
+12. [BFF authentication architecture](12-bff-authentication-architecture.md): current browser-to-Next-to-Nest request flow, JWT renewal, checks, and revocation.
 
 ## How to maintain these documents
 

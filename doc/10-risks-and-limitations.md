@@ -40,7 +40,7 @@ The current sale path creates consistent records. A future importer, direct SQL 
 
 ## R6 — Dashboard read permission is broader than order detail
 
-**IMPORTANT for custom roles; confirmed.** The dashboard checks `store.read` and includes orders, while order detail checks `order.read`. All seeded workforce roles have both, so the difference is hidden in current personas.
+**IMPORTANT for custom roles; confirmed.** The BFF and dashboard check `store.read` and include orders, while order detail checks `order.read`. All seeded workforce roles have both, so the difference is hidden in current personas.
 
 A future role with only store.read would still see order information. Decide whether store.read intentionally includes this data or whether each response segment needs separate grants. Add a custom-role test so the behavior is a deliberate contract.
 
@@ -54,13 +54,13 @@ Receipt totals are calculated correctly by the current sale path, but the databa
 
 **IMPORTANT; confirmed.** Code consumption is held in a process-local map, so restart/multiple processes do not share replay state. Callback fetch has no explicit timeout; returned JSON lacks runtime shape validation. Mock token input is not a decorated DTO. Session creation matches mutable display name as well as subject.
 
-There is no stable provider issuer/subject mapping, durable attempt consumption, refresh design, key rotation, or session cleanup. `API_PUBLIC_URL` falls back to request Host/protocol, so proxy/host trust must be reviewed before external deployment; this review did not establish an exploitable host-header attack. Use explicit trusted configuration and durable provider-flow state when replacing the mock.
+There is no stable provider issuer/subject mapping, durable attempt consumption, key rotation, or session cleanup. Access JWTs can be renewed while the one-hour opaque session is valid; the session itself has no rolling renewal. `WEB_URL`/`WEB_ORIGIN` should be explicitly configured so public auth redirects do not fall back to request Host/protocol. Use explicit trusted configuration and durable provider-flow state when replacing the mock.
 
 ## R9 — Environment and local tooling can leak or misroute data
 
 **IMPORTANT outside isolated development; confirmed.** [db-start.sh](../scripts/db-start.sh) prints the password and full database URL. Compose publishes the database port without a loopback-only binding. The environment distribution script replaces workspace-local regular .env files with root symlinks.
 
-Browser fetch, login links, logout forms, CORS, and mutation Origin checks do not all use the same fallback variables. Misconfiguration can cause requests or redirects to target different hosts. Consolidate validated configuration, remove credential logging, and document the chosen proxy/cookie/origin topology.
+The new BFF uses `API_INTERNAL_URL` for private calls and `WEB_URL`/`WEB_ORIGIN` for public redirects and Origin checks. Misconfiguration can still break callbacks or proxying; keep the two web settings aligned and keep the internal URL private. Consolidate validated configuration, remove credential logging, and document the chosen proxy/cookie/origin topology.
 
 ## R10 — CI does not verify critical behavior
 
@@ -76,13 +76,13 @@ The actual cost of nested relation limits must be measured using generated SQL/q
 
 ## R12 — UI snapshots and contracts can become stale
 
-**IMPORTANT for independent deployments; confirmed.** Capabilities are advisory snapshots. Server enforcement handles changed order eligibility, but focus refetch is disabled and the query key is not identity-specific. Today full login/logout navigation recreates state; future in-app identity switching needs explicit cache isolation.
+**IMPORTANT for independent deployments; confirmed.** Capabilities are advisory snapshots. Server enforcement handles changed order eligibility, but focus refetch is disabled and the query key is not identity-specific. Today full login/logout navigation recreates state; future in-app identity switching needs explicit cache isolation. Direct bearer tokens may retain an old grant for up to 60 seconds after a role change unless the session is revoked.
 
-The frontend expects capabilities to exist. Handwritten response interfaces have no runtime validation and do not exactly enumerate Prisma-spread response fields. Changing API and web independently requires a compatibility plan. Only refunds share a policy-driven capability; other UI action rules still duplicate some server concepts.
+The frontend expects capabilities to exist. Handwritten response interfaces have no runtime validation and do not exactly enumerate Prisma-spread response fields. Changing API and web independently requires a compatibility plan. Only refunds expose a resource-specific capability; other controls use shared `can()` plus local status display rules. Dynamic business rules still belong to Nest.
 
 ## R13 — Operational controls are incomplete
 
-**IMPORTANT before production; confirmed omissions in the inspected app.** There is no application rate limiter, comprehensive security-header configuration, structured request/audit telemetry, readiness probe, backup/restore automation, or cleanup worker. `/` returns metadata without checking the database. No complete deployment or rollback pipeline is checked in.
+**IMPORTANT before production; confirmed omissions in the inspected app.** The BFF exchanges the session for a JWT on every protected request, adding a database read. There is no application rate limiter, comprehensive security-header configuration, structured request/audit telemetry, readiness probe, backup/restore automation, or cleanup worker. `/` returns metadata without checking the database. The inherited public Links scaffold remains public through the BFF. No complete deployment or rollback pipeline is checked in.
 
 Infrastructure outside the repository might supply some controls, but none was verified. Establish ownership and acceptance tests rather than assuming those controls exist. This documentation makes no statement about dependency CVEs because no dependency/security scan was performed.
 

@@ -1,78 +1,59 @@
 # Authentication and sessions
 
-[Documentation index](README.md)
+[Documentation index](README.md) · [BFF request architecture](12-bff-authentication-architecture.md)
 
-## Actual security boundary
+## Identity boundary
 
-This is a local mock authorization-code flow with state and PKCE. It demonstrates protocol mechanics; it does not authenticate a real person or implement a complete external OAuth/OIDC integration. Selecting an existing persona is sufficient to obtain that identity in development.
+This repository uses a local mock authorization-code flow with state and PKCE. It demonstrates the redirects and proof-of-possession mechanics, but choosing a seeded persona is sufficient to claim that identity in development. It is not a real OAuth/OIDC provider. The mock rejects use when `NODE_ENV` is exactly `production`; no production provider adapter is implemented.
 
-[AuthService](../apps/api/src/auth/auth.service.ts) rejects mock-provider usage when `NODE_ENV` is exactly `production`. There is no production identity-provider replacement in the repository. A successful production build does not make login production-ready, and an unset or misspelled environment does not disable the mock.
+NestJS still owns authorization-code creation/exchange, identity mapping, application sessions, and revocation. Next.js now proxies the browser-facing auth paths so the browser receives cookies from its own origin. This preserves the existing mock flow while placing protected API calls behind Next.
 
 ## Login sequence
 
 ```mermaid
 sequenceDiagram
   participant B as Browser
+  participant N as Next.js auth proxy
   participant A as NestJS auth
-  participant M as Local mock provider
   participant D as PostgreSQL
-  B->>A: GET /auth/login?persona=mock-manager-10
-  A-->>B: Set oauth_attempt; redirect with state and challenge
-  B->>M: GET /mock-provider/authorize
-  M->>D: Look up selected user
-  M-->>B: Redirect to callback with code and state
-  B->>A: GET /auth/callback (attempt cookie)
-  A->>A: Validate attempt expiry and state
-  A->>M: POST /mock-provider/token (code and verifier)
-  M->>M: Validate code, redirect, PKCE, replay state
-  M-->>A: Subject and display name
-  A->>D: Validate user; create hashed-token session
-  A-->>B: Set app_session; clear attempt; redirect /dashboard
+  B->>N: GET /auth/login?persona=mock-manager-10
+  N->>A: Forward login
+  A-->>N: Set oauth_attempt; redirect to web /mock-provider/authorize
+  N-->>B: Forward cookie and redirect
+  B->>N: GET /mock-provider/authorize
+  N->>A: Forward authorization request
+  A->>D: Look up selected mock user
+  A-->>B: Redirect through Next to /auth/callback
+  B->>N: GET /auth/callback with attempt cookie
+  N->>A: Forward callback and cookie
+  A->>A: Validate state and redeem code using PKCE
+  A->>D: Insert hashed application session
+  A-->>N: Set app_session; redirect /dashboard
+  N-->>B: Forward cookie and redirect
 ```
 
-1. Login generates random state and a verifier, each from 32 random bytes. The challenge is the SHA-256 base64url representation of the verifier.
-2. An encrypted `oauth_attempt` cookie holds the attempt for five minutes. The mock authorization URL includes client ID `demo-app`, the exact API callback URL, state, and S256 challenge.
-3. The mock provider validates its expected request parameters and looks up the requested existing user. Its code is encrypted, expires after 60 seconds, and binds subject/name, challenge, and redirect URI.
-4. The callback validates state against the attempt cookie, then calls the API's own token route from the server with the verifier.
-5. Token exchange checks expiry, callback binding, PKCE, and an in-memory consumed-code map. It returns identity data rather than a provider access token or ID token.
-6. Session creation requires an existing user whose ID and name match that returned identity. Success sets the application cookie and redirects to the dashboard. Failure clears the attempt and redirects to `/?error=login_failed`.
+The [AuthService](../apps/api/src/auth/auth.service.ts) generates random state and a PKCE verifier. An encrypted `oauth_attempt` cookie lasts five minutes. The mock code expires after 60 seconds, binds the redirect URI and challenge, and is consumed once in the issuing API process. The callback validates state, then Nest redeems the code against its private `/mock-provider/token` route using `API_INTERNAL_URL` (or the local port fallback). The mock returns subject and display name rather than a standards-based provider token. [SessionService](../apps/api/src/auth/session.service.ts) requires a matching existing user ID and name.
 
-State ties the redirect back to the initiating browser attempt. PKCE binds code redemption to possession of the verifier. Neither mechanism makes selecting a demo persona into real identity proof.
+The public redirect URI is based on `WEB_URL`, then `WEB_ORIGIN`, so it points at the Next proxy. An unconfigured web URL falls back to the request protocol/Host in the auth controller; configure an explicit trusted URL for deployment. Failure clears the attempt and normally redirects to `/?error=login_failed`.
 
-## Session representation
+## Opaque application session
 
-[SessionService](../apps/api/src/auth/session.service.ts) generates a random 32-byte session token. PostgreSQL stores its SHA-256 hash in AuthSession, with user ID, expiry, and revocation time. The encrypted browser cookie contains the raw token and expiry. A session lasts one hour; there is no rolling refresh or refresh-token system.
+Session creation generates a random 32-byte token. PostgreSQL stores its SHA-256 hash in `AuthSession`, along with user ID, one-hour expiry, and nullable revocation time. The encrypted HttpOnly `app_session` cookie contains the raw token and expiry. It contains no role or permission claims.
 
-On each authenticated request, the API:
+For each BFF exchange, Nest decrypts the cookie, checks expiry, hashes the token, finds an active session, and loads current user, role permissions, and store assignments. The opaque session can obtain new short-lived access JWTs until its one-hour expiry; this does not extend the session itself. A role/assignment edit appears at the next BFF exchange.
 
-1. Reads and decrypts `app_session` and checks cookie expiry.
-2. Hashes the token and finds the matching session row.
-3. Rejects missing, expired, or revoked sessions.
-4. Loads the associated user, role grants, and store assignments.
-5. Builds an actor with tenant, region, role, permissions, assignments, customer ID, and refund limit.
+## Access JWT
 
-The cookie does not grant authority through a stored role claim. A role or assignment change is reflected on the next authentication lookup. A request that authenticated before revocation can still finish; revocation does not cancel work already in flight.
+`POST /auth/access-token` is an internal BFF exchange. It requires the opaque cookie plus a server-only exchange key derived from `AUTH_COOKIE_SECRET`. No valid key means denial before session lookup. Its response is `Cache-Control: no-store` and contains a 60-second HS256 JWT with subject, session hash, tenant, region, permissions, store IDs, role, customer ID, and refund limit. Signing uses a purpose-separated derived key. The JWT is returned only to the Next server, never to browser JavaScript.
 
-## Cookie encryption and attributes
+[Next's BFF](../apps/web/app/api/bff/[...path]/route.ts) verifies the JWT and checks the shared `can()` policy before forwarding a protected request. [Nest's AccessTokenService](../apps/api/src/auth/access-token.service.ts) verifies the JWT independently and looks up the referenced session hash again. It rejects an expired or revoked session even if the JWT has time remaining. Controllers/services reapply authorization; domain queries check ownership and mutable state.
 
-[auth.crypto.ts](../apps/api/src/auth/auth.crypto.ts) uses AES-256-GCM with a random 12-byte IV and authentication tag. Purpose-specific keys are derived from the configured secret. Sealed payloads use base64url segments. Authentication failures during opening return no payload.
+A direct bearer token is a short-lived authorization snapshot. If permissions are removed without revoking the session, an already issued direct token may retain its old grants until its 60-second expiry. Normal browser requests exchange afresh each time. A direct cookie-only request to a protected Nest route is rejected. Neither revocation nor token expiry cancels work that already passed its check.
 
-`AUTH_COOKIE_SECRET` must decode to at least 32 bytes. It protects both session and mock-flow material with distinct purposes. It is checked when crypto is used; startup does not provide a complete validated configuration gate. There is no key ID or overlapping-key rotation mechanism. Replacing the secret invalidates existing encrypted cookies.
+## Cookie encryption, origin, and logout
 
-Both cookies are HttpOnly, SameSite=Lax, and Path=/; Secure is added in production. They have no Domain attribute. Cookies are host-scoped, not port-scoped, which is relevant when several local apps share localhost. The browser fetch client includes credentials; CORS allows the configured web origin.
+[auth.crypto.ts](../apps/api/src/auth/auth.crypto.ts) uses AES-256-GCM with a random IV and authentication tag. Cookies are HttpOnly, SameSite=Lax, and Path=/; Secure is added in production. They are host scoped, so local ports on the same hostname share the cookie domain. `AUTH_COOKIE_SECRET` must decode to at least 32 random bytes. Replacing it invalidates existing cookies/JWTs; key rotation with overlapping keys is not implemented.
 
-## Logout and logout-all
+Browser writes to the BFF require the configured web Origin. Nest also requires the trusted Origin for retail/order writes and logout. Nest no longer enables credentialed browser CORS. `POST /auth/logout` and `/auth/logout-all` run through Next, revoke the current or all applicable database sessions, clear `app_session`, and redirect with 303. A missing/invalid cookie causes no database revocation but still clears the browser cookie.
 
-`POST /auth/logout` requires the trusted origin, revokes the current active database session if present, clears the cookie, and redirects with HTTP 303. Reusing the old cookie fails after database revocation.
-
-`POST /auth/logout-all` checks for an active stored session before revoking the user's unrevoked session rows. If the cookie/session is missing, expired, or revoked, it revokes zero rows; the controller still clears the cookie and redirects. Neither route contacts an external identity provider. Clearing a browser cookie alone would not revoke a stolen copy; the stored revocation is the important additional step.
-
-Expired and revoked session rows are not cleaned up by a scheduled job in this repository.
-
-## Configuration and failure limits
-
-The auth controller uses `API_PUBLIC_URL`, falling back to request protocol/Host. It uses `WEB_URL`, then `WEB_ORIGIN`, for redirects and logout origin validation. Retail/order write origins use `WEB_ORIGIN` directly. Keep those web values aligned.
-
-The token exchange fetch has no explicit timeout and trusts the returned JSON shape. Invalid JSON can escape the intended login-failed response path. Replay protection is process-local and resets on restart; multiple API processes do not share it. Attempt consumption is not durably recorded. The mock token body's TypeScript annotation is not a decorated DTO with runtime field validation.
-
-These are implementation limits to address when introducing a real provider. See [risks R1 and R8](10-risks-and-limitations.md) and the [roadmap](11-improvement-roadmap.md). No external provider credentials, discovery, signature validation, issuer/audience checks, nonce validation, account linking, or provider logout integration are implemented today.
+Expired and revoked rows have no cleanup worker. The mock consumed-code map is process-local. The callback's internal fetch has no explicit timeout or runtime validation of the mock token response. No real provider credentials, discovery, signed provider-token verification, account linking, provider logout, refresh-token flow, key rotation, or device management exist. See [risks](10-risks-and-limitations.md).

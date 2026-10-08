@@ -4,15 +4,17 @@ import type {
   OrderStatus,
   OrderCapabilities,
 } from './types.js';
+import type { Permission } from '@repo/authorization';
 
 export interface RetailDashboard {
   actor: {
     id: string;
+    userId: string;
     name: string;
     role: string;
     tenantId: string;
     region: string;
-    permissions: string[];
+    permissions: Permission[];
     storeIds: string[];
     refundLimit: number;
   };

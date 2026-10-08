@@ -1,10 +1,7 @@
 import type { ApiEndpointWithBody } from '@repo/api-client';
 import { cookies } from 'next/headers';
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_API ||
-  'http://localhost:3001';
+import { webOrigin } from '../bff/config';
 
 /**
  * Helper type that represents either an endpoint with or without a body
@@ -23,11 +20,12 @@ export async function serverFetch<TResponse>(
   const body = 'body' in endpoint ? endpoint.body : undefined;
 
   const cookieHeader = (await cookies()).toString();
-  const response = await fetch(`${API_BASE_URL}${url}`, {
+  const response = await fetch(`${webOrigin()}/api/bff${url}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
       cookie: cookieHeader,
+      ...(method === 'GET' ? {} : { origin: webOrigin() }),
     },
     body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store', // Server components default to no caching

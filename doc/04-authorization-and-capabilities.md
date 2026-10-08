@@ -6,7 +6,7 @@
 
 Authentication produces an actor. Role-based access control (RBAC) supplies named permissions through Role → RolePermission → Permission. Attribute-based conditions then constrain resources using tenant, region, branch assignments, customer ownership, order status, and refund limit.
 
-These conditions are ordinary service-owned Prisma predicates, not an external policy engine. The frontend never supplies trusted tenant, role, assignments, price, or refund-limit values.
+The shared [runtime-independent `can()` policy](../packages/authorization/src/policy.ts) checks the named grant and optional tenant/store membership in both Next and Nest. Domain services add Prisma predicates for resource ownership, region, status, and limits; there is no external policy engine. The frontend never supplies trusted tenant, role, assignments, price, or refund-limit values.
 
 ## Seeded role grants
 
@@ -21,7 +21,7 @@ The [seed](../packages/prisma/prisma/seed.ts) is the source for the initial gran
 
 ## Resource scoping
 
-[RetailService](../apps/api/src/retail/retail.service.ts) limits stores to IDs in `actor.storeIds` with matching tenant and region. Inventory and sale queries follow the branch-product row's Store relation with that same scope. Sales also require an active product in the actor's tenant and available branch listing.
+Next first checks the route permission from the signed JWT; it cannot infer a trustworthy store ID from an order or listing ID. Nest verifies JWT and session independently. [RetailService](../apps/api/src/retail/retail.service.ts) limits stores to IDs in `actor.storeIds` with matching tenant and region. Inventory and sale queries follow the branch-product row's Store relation with that same scope. Sales also require an active product in the actor's tenant and available branch listing.
 
 [OrdersService](../apps/api/src/orders/orders.service.ts) handles detail reads differently for customers: tenant and region must match, then `customerId` must match. Workforce detail reads instead require an assigned branch. Updates use tenant, region, and assigned branch regardless of customer ownership.
 
@@ -39,7 +39,7 @@ The dashboard requires `store.read` and includes related orders without a separa
 
 Read paths use `refundCapabilities` to find eligible order IDs with that predicate. The dashboard evaluates all returned order IDs in one batched eligibility query rather than one query per row. An actor without permission receives denied capabilities without an eligibility query.
 
-The refund mutation uses the same predicate in `updateMany`, changing status only if exactly one row still qualifies. This shared predicate prevents a permissive UI calculation and a stricter write rule from drifting apart.
+Next checks `can()` for `order.refund` before forwarding. Nest then uses the same predicate in `updateMany`, changing status only if exactly one row still qualifies. This shared predicate prevents a permissive UI calculation and a stricter write rule from drifting apart.
 
 Example response fragment:
 
@@ -61,7 +61,7 @@ An allowed capability has `allowed: true` and `reason: null`. Both order detail 
 
 ## Why the backend still checks on click
 
-A capability is a snapshot, not a token granting execution. After a read, another worker could prepare or refund the order, the user's grants could change, or their session could expire. The write must authenticate again and apply current database conditions.
+A capability is a snapshot, not a token granting execution. After a read, another worker could prepare or refund the order, the user's grants could change, or their session could expire. The BFF obtains a fresh authorization snapshot for each request. Nest verifies the bearer JWT and session, then the write applies current database conditions.
 
 For example, a manager receives an allowed capability for a PAID order. Staff then move it to PREPARING. The manager's later refund attempt is rejected because PAID is part of the update predicate. No stale client flag can override that condition.
 
@@ -73,18 +73,18 @@ In [StoreDashboard](../apps/web/components/store-dashboard.tsx), the normal disa
 busy || (!order.capabilities.refund.allowed && !overrideRefund);
 ```
 
-The checkbox **Demo: enable denied refund buttons** only changes `overrideRefund` in local React state. No override field, role, or capability is sent to the API. The request remains `POST /orders/:id/refund`.
+The checkbox **Demo: enable denied refund buttons** only changes `overrideRefund` in local React state. No override field, role, or capability is sent to the API. The browser request remains `POST /api/bff/orders/:id/refund`; the BFF forwards it to Nest only if its permission check passes.
 
-- Staff can enable a button visually and observe a 403 for missing permission.
-- A manager can attempt order 902 and observe a 403 for branch/status/limit eligibility.
+- Staff can enable a button visually and observe a BFF 403 for missing permission. Nest independently denies a direct bearer call.
+- A manager can attempt order 902; the BFF permits the named action, but Nest returns 403 for branch/status/limit eligibility.
 - An actually allowed refund still changes the order to REFUNDED.
 - Pending mutations keep controls disabled even when the checkbox is checked.
 - Branch changes and page reloads reset the override. Every refund result invalidates the retail query to refresh capabilities.
 
-The error panel displays the actual HTTP status and parsed response body. The current success panel uses a hardcoded 201, matching today's Nest route default; it does not capture success status metadata from fetch.
+The error panel displays the actual HTTP status and parsed response body from whichever layer denies the request. The current success panel uses a hardcoded 201, matching today's Nest route default; it does not capture success status metadata from fetch.
 
 ## Where centralization stops today
 
-Only refunds have resource capabilities. Other controls inspect permission strings and, for preparation, local order status. Their backend checks remain authoritative, but the frontend still duplicates some presentation rules. A future capability extension should cover those actions without relocating business rules to the browser.
+Only refunds have resource capabilities. Other controls call shared `can()` with the returned actor and inspect status and, for preparation, local order status. Their backend checks remain authoritative, but the frontend still duplicates some presentation rules. A future capability extension should cover those actions without relocating business rules to the browser.
 
-The access-summary endpoint uses fixed example IDs 900, 903, 901, and 902. It is an educational report, not a general permission registry. Authorization currently occurs through explicit controller/service calls, so new routes require a conscious protection decision.
+The access-summary endpoint uses fixed example IDs 900, 903, 901, and 902. It is an educational report, not a general permission registry. New protected routes need an explicit BFF allowlist mapping and an independent Nest check. Authorization currently occurs through explicit controller/service calls, not a global guard.

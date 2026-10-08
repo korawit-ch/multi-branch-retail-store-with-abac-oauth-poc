@@ -61,25 +61,25 @@ The overview summarizes the **latest 50 orders per branch**, excluding refunded 
 
 The retail workspace uses `store.read`, `order.read`, `order.create`, `order.update_status`, and `inventory.adjust`. The inherited customer identity remains API-only; customers cannot open the store-manager workspace.
 
-Hiding or disabling a button is only a UI aid. NestJS loads the actor's current grants and assignments from PostgreSQL and enforces access on every request, including direct API calls.
+Hiding or disabling a button is only a UI aid. Next.js checks a short-lived authorization snapshot before proxying protected requests. NestJS independently verifies the token and session, then enforces resource scope and business rules.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Browser[Browser] --> Web[Next.js web app]
-  Web --> Contracts[Shared API endpoint contracts]
-  Browser -->|Cookie-authenticated requests| API[NestJS API]
-  API --> Auth[Session and permission checks]
-  Auth --> Retail[Retail and order services]
-  Retail --> Prisma[Shared Prisma client]
+  Browser[Browser with opaque cookie] --> BFF[Next.js BFF]
+  BFF -->|Session exchange| Auth[NestJS auth]
+  Auth --> Sessions[(PostgreSQL sessions)]
+  Auth -->|Short-lived JWT| BFF
+  BFF -->|Bearer JWT| API[NestJS retail API]
+  API --> Prisma[Prisma]
   Prisma --> DB[(PostgreSQL)]
 ```
 
 - **Frontend:** Next.js App Router and React; TanStack Query handles API state through the frontend-owned fetch client.
-- **Backend:** NestJS owns authentication, validated DTOs, authorization, and business transactions.
+- **Backend:** NestJS owns session exchange, JWT verification, validated DTOs, independent authorization, and business transactions.
 - **Database:** Prisma models and SQL migrations define relationships, indexes, and constraints.
-- **Shared packages:** runtime-independent API contracts, reusable UI and icons, design-system styles, and common lint/test/TypeScript configuration.
+- **Shared packages:** runtime-independent API contracts and `can()` policy, reusable UI and icons, design-system styles, and common lint/test/TypeScript configuration.
 
 ```text
 apps/
@@ -122,8 +122,9 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 Check these settings in `.env`:
 
 - `DATABASE_URL`: PostgreSQL connection string. Keep it aligned with `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and `DB_PORT`; update it explicitly when changing database settings.
-- `API_PORT` and `API_PUBLIC_URL`: backend listener and OAuth callback base URL.
-- `NEXT_PUBLIC_API`: browser-facing API URL.
+- `API_PORT`: NestJS listener port. `API_INTERNAL_URL` is the private server-to-server NestJS URL, defaulting to this local port.
+- `AUTH_COOKIE_SECRET`: shared privately by Next.js and NestJS for distinct cookie, exchange, and JWT keys.
+- Browser API requests use same-origin `/api/bff`; the legacy `API_PUBLIC_URL` and `NEXT_PUBLIC_API` settings are no longer used for the protected UI flow.
 - `WEB_ORIGIN` and `WEB_URL`: frontend origin and post-login destination. They must match the actual frontend URL.
 - `NODE_ENV=development`: enables the local mock sign-in flow.
 
@@ -207,7 +208,7 @@ npm run lint --workspace=@repo/api-client
 npm run test:retail
 ```
 
-`test:retail` requires a running, seeded development API and reads its URLs from `.env`. It verifies OAuth login, session revocation, role denials, branch isolation, input validation, trusted-origin checks, receipt prices, order transitions, and concurrent stock protection.
+`test:retail` requires running Next.js and NestJS servers plus a seeded development API and reads its URLs from `.env`. It verifies OAuth login, session revocation, role denials, branch isolation, input validation, trusted-origin checks, receipt prices, order transitions, and concurrent stock protection.
 
 **Run it only against a local demo database:** it creates a test sale and audit entries, restores the tested product's starting stock, and revokes its test sessions.
 
@@ -217,6 +218,7 @@ npm run test:retail
 - [Retail controller](apps/api/src/retail/retail.controller.ts)
 - [OAuth demo service](apps/api/src/auth/auth.service.ts)
 - [Session authentication and revocation](apps/api/src/auth/session.service.ts)
+- [BFF request and JWT architecture](doc/12-bff-authentication-architecture.md)
 - [Shared retail contracts](packages/api-client/src/retail.ts)
 - [Database schema](packages/prisma/prisma/schema.prisma)
 - [Demo seed](packages/prisma/prisma/seed.ts)

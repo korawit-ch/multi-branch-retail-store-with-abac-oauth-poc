@@ -22,7 +22,7 @@ Set `AUTH_COOKIE_SECRET` in `.env` to a random base64url secret (at least 32 byt
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Check `DATABASE_URL`, `API_PORT`, `API_PUBLIC_URL`, `NEXT_PUBLIC_API`, `WEB_ORIGIN`, and `WEB_URL` in `.env`. Then:
+Check `DATABASE_URL`, `API_PORT`, `API_INTERNAL_URL`, `WEB_ORIGIN`, and `WEB_URL` in `.env`. Both servers need the same private `AUTH_COOKIE_SECRET`. Then:
 
 ```sh
 npm run env:distribute
@@ -94,7 +94,7 @@ npm run lint --workspace=@repo/api-client
 npm run test:retail
 ```
 
-`test:retail` requires a running seeded development API configured through `.env`. It creates one test sale and audit entries, restores the tested product's starting stock, and revokes its own sessions. Run it only on a local demo database. It checks OAuth login, session revocation, role denials, branch isolation, invalid inputs, untrusted origins, negative stock, server-owned receipt prices, order transitions, and two concurrent requests competing for one available unit.
+`test:retail` requires running Next.js and NestJS servers with a seeded development API configured through `.env`. It creates one test sale and audit entries, restores the tested product's starting stock, and revokes its own sessions. Run it only on a local demo database. It checks OAuth login, session revocation, role denials, branch isolation, invalid inputs, untrusted origins, negative stock, server-owned receipt prices, order transitions, and two concurrent requests competing for one available unit.
 
 The local mock provider does not authenticate real people. Code replay protection is process-local and production mode disables the mock. Real deployment requires an actual OAuth/OIDC provider adapter and durable one-time authorization flow storage; no provider credentials are required for this demo.
 
@@ -102,7 +102,7 @@ The local mock provider does not authenticate real people. Code replay protectio
 
 Open **Orders** as the Siam Square manager. Every order includes `capabilities.refund`, calculated by the API for the signed-in user. Order 902 exceeds the seeded manager's THB 500 refund limit, so its Refund button is disabled with a backend-provided explanation. Staff have no refund permission, so all their Refund buttons are disabled.
 
-Check **Demo: enable denied refund buttons** and click a disabled-by-policy refund. The request goes to the normal refund endpoint; the checkbox is never sent to the API. The response panel shows the real HTTP 403 status and JSON error body. Uncheck it to restore the normal disabled state. The override resets on a branch change or a page reload.
+Check **Demo: enable denied refund buttons** and click a disabled-by-policy refund. The request goes through the normal BFF route; the checkbox is never sent to either server. The response panel shows the HTTP 403 from the Next.js BFF when a permission is missing; NestJS independently rejects direct unauthorized bearer calls. Uncheck it to restore the normal disabled state. The override resets on a branch change or a page reload.
 
 Allowed refunds still change the order status. This demonstration does not contact a payment provider or replenish inventory.
 

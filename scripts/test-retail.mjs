@@ -2,11 +2,15 @@
 // Run against the seeded LOCAL demo API. Creates a test sale and audit entries.
 import assert from 'node:assert/strict';
 import 'dotenv/config';
-const api = process.env.API_PUBLIC_URL || 'http://localhost:3001';
-const origin = process.env.WEB_ORIGIN || 'http://localhost:3000';
+import { internalExchangeKey } from '@repo/authorization';
+const api =
+  process.env.API_INTERNAL_URL ||
+  `http://localhost:${process.env.API_PORT || 3001}`;
+const origin =
+  process.env.WEB_URL || process.env.WEB_ORIGIN || 'http://localhost:3000';
 async function login(persona) {
   const jar = new Map();
-  let url = `${api}/auth/login?persona=${persona}`;
+  let url = `${origin}/auth/login?persona=${persona}`;
   for (let hop = 0; hop < 4; hop++) {
     const response = await fetch(url, {
       redirect: 'manual',
@@ -22,7 +26,7 @@ async function login(persona) {
       assert.ok(jar.get('app_session'));
       return [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
     }
-    assert.ok(next.startsWith(api), 'Unexpected OAuth redirect');
+    assert.ok(next.startsWith(origin), 'Unexpected OAuth redirect');
     url = next;
   }
   throw new Error('Login did not complete');
@@ -34,7 +38,10 @@ async function request(
   method = 'POST',
   requestOrigin = origin,
 ) {
-  return fetch(api + path, {
+  const target = path.startsWith('/auth/')
+    ? origin + path
+    : origin + '/api/bff' + path;
+  return fetch(target, {
     method,
     redirect: 'manual',
     headers: {
@@ -51,10 +58,42 @@ async function dashboard(cookie) {
   return r.json();
 }
 assert.equal((await request('', '/retail', null, 'GET')).status, 401);
+assert.equal((await fetch(api + '/retail')).status, 401);
 const manager = await login('mock-manager-10');
 const staff = await login('mock-staff-10');
 const hq = await login('mock-hq');
 const other = await login('mock-manager-42');
+// Direct NestJS calls require a signed access token, not an opaque cookie.
+assert.equal(
+  (await fetch(api + '/retail', { headers: { cookie: manager } })).status,
+  401,
+);
+const tokenResponse = await fetch(api + '/auth/access-token', {
+  method: 'POST',
+  headers: {
+    cookie: staff,
+    'x-bff-key': await internalExchangeKey(process.env.AUTH_COOKIE_SECRET),
+  },
+});
+assert.equal(tokenResponse.status, 201);
+const { accessToken: staffToken } = await tokenResponse.json();
+assert.equal(
+  (
+    await fetch(api + '/retail', {
+      headers: { authorization: `Bearer ${staffToken}` },
+    })
+  ).status,
+  200,
+);
+const directDenied = await fetch(api + '/orders/901/refund', {
+  method: 'POST',
+  headers: { authorization: `Bearer ${staffToken}`, origin },
+});
+assert.equal(directDenied.status, 403);
+assert.equal(
+  (await directDenied.json()).message,
+  'Your role does not have order.refund permission.',
+);
 assert.deepEqual(
   (await dashboard(manager)).stores.map((s) => s.id),
   ['10'],
@@ -230,7 +269,16 @@ try {
 }
 await request(manager, '/auth/logout');
 assert.equal((await request(manager, '/retail', null, 'GET')).status, 401);
-for (const cookie of [staff, hq, other]) await request(cookie, '/auth/logout');
+await request(staff, '/auth/logout');
+assert.equal(
+  (
+    await fetch(api + '/retail', {
+      headers: { authorization: `Bearer ${staffToken}` },
+    })
+  ).status,
+  401,
+);
+for (const cookie of [hq, other]) await request(cookie, '/auth/logout');
 console.info(
   'PASS: OAuth, revocation, role permissions, branch isolation, validation, CSRF origin, price snapshots, order lifecycle, and concurrent stock safety.',
 );

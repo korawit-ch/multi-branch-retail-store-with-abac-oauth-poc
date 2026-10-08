@@ -8,40 +8,50 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { SessionService } from '../auth/session.service';
+import { AccessTokenService } from '../auth/access-token.service';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { OrdersService } from './orders.service';
 
 @Controller('orders')
 export class OrdersController {
   constructor(
-    private readonly sessions: SessionService,
+    private readonly accessTokens: AccessTokenService,
     private readonly orders: OrdersService,
   ) {}
 
   @Get('access-summary')
-  async accessSummary(@Headers('cookie') cookie: string | undefined) {
-    return this.orders.accessSummary(await this.sessions.authenticate(cookie));
+  async accessSummary(
+    @Headers('authorization') authorization: string | undefined,
+  ) {
+    return this.orders.accessSummary(
+      await this.accessTokens.authenticate(authorization),
+    );
   }
 
   @Get(':id')
   async findOne(
-    @Headers('cookie') cookie: string | undefined,
+    @Headers('authorization') authorization: string | undefined,
     @Param('id') id: string,
   ) {
-    return this.orders.findOne(await this.sessions.authenticate(cookie), id);
+    return this.orders.findOne(
+      await this.accessTokens.authenticate(authorization, 'order.read'),
+      id,
+    );
   }
 
   @Patch(':id')
   async update(
-    @Headers('cookie') cookie: string | undefined,
+    @Headers('authorization') authorization: string | undefined,
     @Headers('origin') origin: string | undefined,
     @Param('id') id: string,
     @Body() body: UpdateOrderStatusDto,
   ) {
     this.requireTrustedOrigin(origin);
     return this.orders.updateStatus(
-      await this.sessions.authenticate(cookie),
+      await this.accessTokens.authenticate(
+        authorization,
+        'order.update_status',
+      ),
       id,
       body.status,
     );
@@ -49,12 +59,15 @@ export class OrdersController {
 
   @Post(':id/refund')
   async refund(
-    @Headers('cookie') cookie: string | undefined,
+    @Headers('authorization') authorization: string | undefined,
     @Headers('origin') origin: string | undefined,
     @Param('id') id: string,
   ) {
     this.requireTrustedOrigin(origin);
-    return this.orders.refund(await this.sessions.authenticate(cookie), id);
+    return this.orders.refund(
+      await this.accessTokens.authenticate(authorization),
+      id,
+    );
   }
 
   private requireTrustedOrigin(origin: string | undefined) {
