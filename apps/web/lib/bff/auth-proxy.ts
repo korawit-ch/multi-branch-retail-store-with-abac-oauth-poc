@@ -11,7 +11,8 @@ export async function proxyAuth(
       ['/auth/login', '/auth/callback', '/mock-provider/authorize'].includes(
         path,
       )) ||
-    (method === 'POST' && ['/auth/logout', '/auth/logout-all'].includes(path));
+    (method === 'POST' &&
+      ['/auth/refresh', '/auth/logout', '/auth/logout-all'].includes(path));
   if (!allowed) return new Response('Not found', { status: 404 });
   if (method === 'POST' && !isTrustedOrigin(request.headers.get('origin')))
     return Response.json(

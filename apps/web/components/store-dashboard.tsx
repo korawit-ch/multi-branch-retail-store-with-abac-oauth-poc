@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ordersApi, retailApi } from '@repo/api-client';
-import { can as canPerform, type Permission } from '@repo/authorization';
+import type { Permission } from '@repo/authorization';
 import { Button } from '@repo/ui/button';
 import { ApiError, clientFetch } from '../lib/fetch/client';
 
@@ -38,6 +38,12 @@ export function StoreDashboard() {
   const query = useQuery({
     queryKey: ['retail'],
     queryFn: () => clientFetch(retailApi.dashboard()),
+    retry: false,
+  });
+  const accessQuery = useQuery({
+    queryKey: ['access-summary'],
+    queryFn: () => clientFetch(ordersApi.accessSummary()),
+    enabled: section === 'My access',
     retry: false,
   });
   const mutation = useMutation({
@@ -101,7 +107,8 @@ export function StoreDashboard() {
     );
   const { actor, stores } = query.data;
   const store = stores.find((s) => s.id === branch) || stores[0];
-  const can = (permission: Permission) => canPerform(actor, permission);
+  const can = (permission: Permission) =>
+    actor.permissions.includes(permission);
   const products =
     store?.products.filter((p) =>
       `${p.product.name} ${p.product.sku}`
@@ -582,6 +589,7 @@ export function StoreDashboard() {
                         'order.read',
                         'order.create',
                         'order.update_status',
+                        'order.refund',
                         'inventory.adjust',
                       ] as Permission[]
                     ).map((p) => (
@@ -593,9 +601,32 @@ export function StoreDashboard() {
                       </div>
                     ))}
                   </div>
+                  <h3>Conditional access examples</h3>
+                  <p>
+                    The API evaluates each action against current orders and its
+                    signed tenant and branch grant scope.
+                  </p>
+                  {accessQuery.data?.examples.map((example) => (
+                    <div className="stock-row" key={example.label}>
+                      <div className="grow">
+                        <strong>{example.label}</strong>
+                        <p>{example.reason}</p>
+                      </div>
+                      <span
+                        className={`pill ${example.allowed ? 'green' : ''}`}
+                      >
+                        {example.allowed ? 'Allowed' : 'Denied'}
+                      </span>
+                    </div>
+                  ))}
+                  {accessQuery.isPending && <p>Checking current orders…</p>}
+                  {accessQuery.isError && (
+                    <p>Could not load the conditional access examples.</p>
+                  )}
                   <p className="footnote">
-                    The API checks permissions and branch scope on every
-                    request. Choosing a branch never grants extra access.
+                    A named grant is only the first check. The API enforces
+                    resource scope and current business conditions in database
+                    queries; choosing a branch never grants extra access.
                   </p>
                   <form action={'/auth/logout-all'} method="post">
                     <Button variant="secondary" type="submit">

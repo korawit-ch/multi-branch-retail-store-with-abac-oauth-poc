@@ -1,127 +1,99 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import {
-  internalExchangeKey,
-  signAccessToken,
+  accessTokenLifetimeSeconds,
   verifyAccessToken,
 } from '@repo/authorization';
 import type { PrismaService } from '../prisma/prisma.service';
-import type { AuthenticatedActor } from './auth.types';
-import type { SessionService } from './session.service';
 import { AccessTokenService } from './access-token.service';
+import { buildPermissionGrants } from './authorization-policy';
+import type { AuthenticatedActor } from './auth.types';
 
 const secret = Buffer.alloc(32, 3).toString('base64url');
 const actor: AuthenticatedActor = {
   id: 'manager',
-  userId: 'manager',
   name: 'Manager',
-  tenantId: 'thai-food',
   region: 'TH',
   role: 'STORE_MANAGER',
   customerId: null,
   refundLimit: 500,
-  permissions: ['store.read', 'order.refund'],
-  storeIds: ['10'],
+  subject: { userId: 'manager', tenantId: 'thai-food', storeIds: ['10'] },
+  grants: buildPermissionGrants('STORE_MANAGER', [
+    'store.read',
+    'order.refund',
+  ]),
 };
 
 function setup() {
-  const sessions = {
-    authenticateSession: jest.fn().mockResolvedValue({
-      actor,
-      sessionHash: 'session-hash',
-    }),
-  };
-  const authSession = {
+  const user = {
     findUnique: jest.fn().mockResolvedValue({
-      userId: actor.id,
-      expiresAt: new Date(Date.now() + 60_000),
-      revokedAt: null,
+      name: actor.name,
+      tenantId: actor.subject.tenantId,
+      region: 'TH',
+      refundLimit: 250,
+      customerId: null,
     }),
   };
-  const service = new AccessTokenService(
-    sessions as unknown as SessionService,
-    { client: { authSession } } as unknown as PrismaService,
-  );
-  return { service, sessions, authSession };
+  const authSession = { findUnique: jest.fn() };
+  const service = new AccessTokenService({
+    client: { user, authSession },
+  } as unknown as PrismaService);
+  return { service, user, authSession };
 }
 
 describe('AccessTokenService', () => {
-  const previousSecret = process.env.AUTH_COOKIE_SECRET;
+  const previousSecret = process.env.AUTH_JWT_SECRET;
   beforeEach(() => {
-    process.env.AUTH_COOKIE_SECRET = secret;
+    process.env.AUTH_JWT_SECRET = secret;
   });
   afterEach(() => {
-    if (previousSecret === undefined) delete process.env.AUTH_COOKIE_SECRET;
-    else process.env.AUTH_COOKIE_SECRET = previousSecret;
+    if (previousSecret === undefined) delete process.env.AUTH_JWT_SECRET;
+    else process.env.AUTH_JWT_SECRET = previousSecret;
   });
 
-  it('exchanges only through the BFF and signs a one-minute authorization snapshot', async () => {
-    const { service, sessions } = setup();
-    await expect(
-      service.exchange('app_session=abc', 'wrong'),
-    ).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(sessions.authenticateSession).not.toHaveBeenCalled();
-    const result = await service.exchange(
-      'app_session=abc',
-      await internalExchangeKey(secret),
-    );
-    expect(result.expiresIn).toBe(60);
-    const claims = await verifyAccessToken(result.accessToken, secret);
-    expect(claims).toMatchObject({
-      sub: actor.id,
-      sid: 'session-hash',
-      permissions: actor.permissions,
-      storeIds: ['10'],
-    });
-    expect(claims!.exp - claims!.iat).toBe(60);
-    expect(
-      await verifyAccessToken(
-        result.accessToken,
-        Buffer.alloc(32, 4).toString('base64url'),
-      ),
-    ).toBeNull();
-  });
-
-  it('rejects bearer tokens after database revocation, and checks permission separately', async () => {
+  it('issues a ten-minute signed grant matrix and loads current domain attributes', async () => {
     const { service, authSession } = setup();
-    const token = await signAccessToken(
-      { ...actor, sub: actor.id, sid: 'session-hash' },
-      secret,
-    );
+    const token = await service.issue(actor);
+    const claims = await verifyAccessToken(token, secret);
+    expect(claims).toMatchObject({
+      sub: 'manager',
+      attributes: { tenantId: 'thai-food', storeIds: ['10'] },
+      grants: actor.grants,
+    });
+    expect(claims!.exp - claims!.iat).toBe(accessTokenLifetimeSeconds);
     await expect(
-      service.authenticate(`Bearer ${token}`, 'store.read'),
-    ).resolves.toMatchObject({ id: actor.id });
+      service.authenticate(`Bearer ${token}`, 'order.refund'),
+    ).resolves.toMatchObject({ refundLimit: 250, subject: actor.subject });
+    expect(authSession.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('denies a missing grant and a changed tenant', async () => {
+    const { service, user } = setup();
+    const token = await service.issue(actor);
     await expect(
       service.authenticate(`Bearer ${token}`, 'inventory.adjust'),
     ).rejects.toBeInstanceOf(ForbiddenException);
-    authSession.findUnique.mockResolvedValue({
-      userId: actor.id,
-      expiresAt: new Date(Date.now() + 60_000),
-      revokedAt: new Date(),
-    });
+    user.findUnique.mockResolvedValue({ tenantId: 'another-tenant' });
     await expect(
       service.authenticate(`Bearer ${token}`),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
-  it('rejects a forged or expired token before querying the database', async () => {
-    const { service, authSession } = setup();
+  it('rejects forged or expired tokens before database access', async () => {
+    const { service, user } = setup();
     await expect(service.authenticate('Bearer forged')).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
-    expect(authSession.findUnique).not.toHaveBeenCalled();
+    expect(user.findUnique).not.toHaveBeenCalled();
     const realNow = Date.now;
     const start = realNow();
     Date.now = () => start;
     try {
-      const token = await signAccessToken(
-        { ...actor, sub: actor.id, sid: 'session-hash' },
-        secret,
-      );
-      Date.now = () => start + 61_000;
+      const token = await service.issue(actor);
+      Date.now = () => start + (accessTokenLifetimeSeconds + 1) * 1000;
       await expect(
         service.authenticate(`Bearer ${token}`),
       ).rejects.toBeInstanceOf(UnauthorizedException);
-      expect(authSession.findUnique).not.toHaveBeenCalled();
+      expect(user.findUnique).not.toHaveBeenCalled();
     } finally {
       Date.now = realNow;
     }

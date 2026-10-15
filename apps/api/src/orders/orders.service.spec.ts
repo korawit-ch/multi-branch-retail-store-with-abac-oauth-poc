@@ -3,18 +3,25 @@ import { OrderStatus, RoleCode } from '@repo/prisma';
 import type { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from '../auth/auth.types';
 import { OrdersService } from './orders.service';
+import { buildPermissionGrants } from '../auth/authorization-policy';
 
 const actor: AuthenticatedActor = {
   id: 'mock-manager-10',
-  userId: 'mock-manager-10',
   name: 'Store 10 manager',
-  tenantId: 'thai-food',
   region: 'TH',
   refundLimit: 500,
   customerId: null,
   role: RoleCode.STORE_MANAGER,
-  permissions: ['order.read', 'order.update_status', 'order.refund'],
-  storeIds: ['10'],
+  subject: {
+    userId: 'mock-manager-10',
+    tenantId: 'thai-food',
+    storeIds: ['10'],
+  },
+  grants: buildPermissionGrants(RoleCode.STORE_MANAGER, [
+    'order.read',
+    'order.update_status',
+    'order.refund',
+  ]),
 };
 
 function setup() {
@@ -67,7 +74,7 @@ describe('OrdersService', () => {
   it('denies before querying when the role lacks the named permission', async () => {
     const { order, service } = setup();
     await expect(
-      service.refund({ ...actor, permissions: [] }, '901'),
+      service.refund({ ...actor, grants: [] }, '901'),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(order.updateMany).not.toHaveBeenCalled();
   });

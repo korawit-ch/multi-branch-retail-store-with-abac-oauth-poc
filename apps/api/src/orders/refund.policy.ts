@@ -1,17 +1,19 @@
 import { OrderStatus, type Prisma, type PrismaClient } from '@repo/prisma';
 import type { AuthenticatedActor } from '../auth/auth.types';
-import { can } from '@repo/authorization';
+import { hasPermission, resourceScope } from '@repo/authorization';
 
 // One SQL policy supplies both read-time capabilities and atomic write conditions.
 export function refundPolicy(actor: AuthenticatedActor) {
-  const permitted = can(actor, 'order.refund');
+  const grantScope = resourceScope(actor, 'order.refund');
+  const permitted =
+    hasPermission(actor, 'order.refund') &&
+    Boolean(grantScope?.tenantId && grantScope.storeId);
   const reason = permitted
     ? 'Refund requires a paid order in your assigned branch within your refund limit.'
     : 'Your role does not have order.refund permission.';
   const where: Prisma.OrderWhereInput = {
-    tenantId: actor.tenantId,
+    ...grantScope,
     region: actor.region,
-    storeId: { in: actor.storeIds },
     status: OrderStatus.PAID,
     total: { lte: actor.refundLimit },
   };

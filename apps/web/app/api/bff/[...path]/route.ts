@@ -1,6 +1,6 @@
 import {
-  can,
-  internalExchangeKey,
+  hasPermission,
+  toAuthorizationContext,
   verifyAccessToken,
 } from '@repo/authorization';
 import {
@@ -15,6 +15,14 @@ export const dynamic = 'force-dynamic';
 
 type Context = { params: Promise<{ path: string[] }> };
 
+function accessCookie(header: string | null) {
+  return header
+    ?.split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('access_token='))
+    ?.slice('access_token='.length);
+}
+
 async function handle(request: Request, context: Context) {
   const { path } = await context.params;
   const route = protectedRoute(request.method, path);
@@ -28,43 +36,16 @@ async function handle(request: Request, context: Context) {
       { status: 403 },
     );
 
-  const secret = process.env.AUTH_COOKIE_SECRET;
+  const secret = process.env.AUTH_JWT_SECRET;
   const api = internalApiUrl();
   let token: string | null = null;
   if (!route.public) {
-    if (!secret) throw new Error('AUTH_COOKIE_SECRET is required');
-    let exchange: Response;
-    try {
-      exchange = await fetch(new URL('/auth/access-token', api), {
-        method: 'POST',
-        headers: {
-          cookie: request.headers.get('cookie') || '',
-          'x-bff-key': await internalExchangeKey(secret),
-        },
-        cache: 'no-store',
-      });
-    } catch {
-      return Response.json(
-        { message: 'Authentication service unavailable' },
-        { status: 502 },
-      );
-    }
-    if (!exchange.ok)
-      return Response.json(
-        { message: 'Authentication required' },
-        { status: 401 },
-      );
-    const data: unknown = await exchange.json().catch(() => null);
-    if (!data || typeof data !== 'object' || !('accessToken' in data))
-      return Response.json(
-        { message: 'Invalid authentication response' },
-        { status: 502 },
-      );
-    token = typeof data.accessToken === 'string' ? data.accessToken : null;
+    if (!secret) throw new Error('AUTH_JWT_SECRET is required');
+    token = accessCookie(request.headers.get('cookie')) || null;
     if (!token)
       return Response.json(
-        { message: 'Invalid authentication response' },
-        { status: 502 },
+        { message: 'Access token required' },
+        { status: 401 },
       );
     const claims = await verifyAccessToken(token, secret);
     if (!claims)
@@ -72,7 +53,13 @@ async function handle(request: Request, context: Context) {
         { message: 'Invalid access token' },
         { status: 401 },
       );
-    if (route.permission && !can(claims, route.permission))
+    const auth = toAuthorizationContext(claims);
+    if (!auth)
+      return Response.json(
+        { message: 'Invalid authorization claims' },
+        { status: 401 },
+      );
+    if (route.permission && !hasPermission(auth, route.permission))
       return Response.json(
         {
           message:

@@ -3,8 +3,6 @@ import {
   Controller,
   ForbiddenException,
   Get,
-  Header,
-  Headers,
   Post,
   Query,
   Req,
@@ -14,6 +12,7 @@ import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
 import { AccessTokenService } from './access-token.service';
+import { accessTokenLifetimeSeconds } from '@repo/authorization';
 
 const cookieOptions = 'HttpOnly; SameSite=Lax; Path=/';
 const secure = () => (process.env.NODE_ENV === 'production' ? '; Secure' : '');
@@ -138,39 +137,47 @@ export class AuthController {
     const session = identity
       ? await this.sessions.createSession(identity)
       : null;
+    const actor = session
+      ? await this.sessions.authenticate(`app_session=${session}`)
+      : null;
+    const accessToken = actor ? await this.accessTokens.issue(actor) : null;
     response.setHeader(
       'Set-Cookie',
-      session
+      session && accessToken
         ? [
             `oauth_attempt=; Max-Age=0; ${cookieOptions}${secure()}`,
             `app_session=${session}; Max-Age=3600; ${cookieOptions}${secure()}`,
+            `access_token=${accessToken}; Max-Age=${accessTokenLifetimeSeconds}; ${cookieOptions}${secure()}`,
           ]
         : `oauth_attempt=; Max-Age=0; ${cookieOptions}${secure()}`,
     );
     return response.redirect(
-      session
+      session && accessToken
         ? `${this.webUrl()}/dashboard`
         : `${this.webUrl()}/?error=login_failed`,
     );
   }
 
-  @Post('auth/access-token')
-  @Header('Cache-Control', 'no-store')
-  accessToken(
-    @Headers('cookie') cookie: string | undefined,
-    @Headers('x-bff-key') exchangeKey: string | undefined,
-  ) {
-    return this.accessTokens.exchange(cookie, exchangeKey);
+  @Post('auth/refresh')
+  async refresh(@Req() request: Request, @Res() response: Response) {
+    this.requireTrustedOrigin(request);
+    const actor = await this.sessions.authenticate(request.headers.cookie);
+    const token = await this.accessTokens.issue(actor);
+    response.setHeader(
+      'Set-Cookie',
+      `access_token=${token}; Max-Age=${accessTokenLifetimeSeconds}; ${cookieOptions}${secure()}`,
+    );
+    return response.status(204).send();
   }
 
   @Post('auth/logout')
   async logout(@Req() request: Request, @Res() response: Response) {
     this.requireTrustedOrigin(request);
     await this.sessions.revokeCurrentSession(request.headers.cookie);
-    response.setHeader(
-      'Set-Cookie',
+    response.setHeader('Set-Cookie', [
       `app_session=; Max-Age=0; ${cookieOptions}${secure()}`,
-    );
+      `access_token=; Max-Age=0; ${cookieOptions}${secure()}`,
+    ]);
     return response.redirect(303, this.webUrl());
   }
 
@@ -178,10 +185,10 @@ export class AuthController {
   async logoutAll(@Req() request: Request, @Res() response: Response) {
     this.requireTrustedOrigin(request);
     await this.sessions.revokeAllSessions(request.headers.cookie);
-    response.setHeader(
-      'Set-Cookie',
+    response.setHeader('Set-Cookie', [
       `app_session=; Max-Age=0; ${cookieOptions}${secure()}`,
-    );
+      `access_token=; Max-Age=0; ${cookieOptions}${secure()}`,
+    ]);
     return response.redirect(303, this.webUrl());
   }
 }

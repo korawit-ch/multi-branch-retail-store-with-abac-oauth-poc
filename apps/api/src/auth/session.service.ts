@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from './auth.types';
 import type { SessionCookie } from './auth-flow.types';
 import { hashToken, open, randomSecret, seal } from './auth.crypto';
-import { isPermission } from '@repo/authorization';
+import { buildPermissionGrants } from './authorization-policy';
 
 @Injectable()
 export class SessionService {
@@ -62,17 +62,20 @@ export class SessionService {
     const user = stored.user;
     const actor: AuthenticatedActor = {
       id: user.id,
-      userId: user.id,
       name: user.name,
-      tenantId: user.tenantId,
       region: user.region,
       refundLimit: Number(user.refundLimit),
       customerId: user.customerId,
       role: user.role.code,
-      permissions: user.role.permissions
-        .map(({ permission }) => permission.code)
-        .filter(isPermission),
-      storeIds: user.assignedStores.map(({ storeId }) => storeId),
+      subject: {
+        userId: user.id,
+        tenantId: user.tenantId,
+        storeIds: user.assignedStores.map(({ storeId }) => storeId),
+      },
+      grants: buildPermissionGrants(
+        user.role.code,
+        user.role.permissions.map(({ permission }) => permission.code),
+      ),
     };
     return { actor, sessionHash: hashToken(session.token) };
   }

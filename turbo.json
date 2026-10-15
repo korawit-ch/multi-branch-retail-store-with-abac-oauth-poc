@@ -4,6 +4,7 @@
   "globalEnv": [
     "NODE_ENV",
     "AUTH_COOKIE_SECRET",
+    "AUTH_JWT_SECRET",
     "API_PORT",
     "API_PUBLIC_URL",
     "API_INTERNAL_URL",

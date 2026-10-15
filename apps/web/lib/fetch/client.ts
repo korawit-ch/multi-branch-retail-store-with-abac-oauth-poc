@@ -12,6 +12,22 @@ export class ApiError extends Error {
 }
 
 const API_BASE_URL = '/api/bff';
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccess(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch('/auth/refresh', {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((response) => response.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
 
 /**
  * Helper type that represents either an endpoint with or without a body
@@ -29,14 +45,17 @@ export async function clientFetch<TResponse>(
   const { url, method } = endpoint;
   const body = 'body' in endpoint ? endpoint.body : undefined;
 
-  const response = await fetch(`${API_BASE_URL}${url}`, {
+  const init: RequestInit = {
     method,
     headers: {
       'Content-Type': 'application/json',
     },
     body: body ? JSON.stringify(body) : undefined,
     credentials: 'include',
-  });
+  };
+  let response = await fetch(`${API_BASE_URL}${url}`, init);
+  if (response.status === 401 && (await refreshAccess()))
+    response = await fetch(`${API_BASE_URL}${url}`, init);
 
   if (!response.ok) {
     const error = (await response.json().catch(() => null)) as {

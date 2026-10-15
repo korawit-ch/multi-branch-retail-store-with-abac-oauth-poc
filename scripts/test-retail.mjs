@@ -2,7 +2,6 @@
 // Run against the seeded LOCAL demo API. Creates a test sale and audit entries.
 import assert from 'node:assert/strict';
 import 'dotenv/config';
-import { internalExchangeKey } from '@repo/authorization';
 const api =
   process.env.API_INTERNAL_URL ||
   `http://localhost:${process.env.API_PORT || 3001}`;
@@ -63,20 +62,20 @@ const manager = await login('mock-manager-10');
 const staff = await login('mock-staff-10');
 const hq = await login('mock-hq');
 const other = await login('mock-manager-42');
+const renewed = await request(manager, '/auth/refresh');
+assert.equal(renewed.status, 204);
+assert.ok(
+  renewed.headers
+    .getSetCookie()
+    .some((value) => value.startsWith('access_token=')),
+);
 // Direct NestJS calls require a signed access token, not an opaque cookie.
 assert.equal(
   (await fetch(api + '/retail', { headers: { cookie: manager } })).status,
   401,
 );
-const tokenResponse = await fetch(api + '/auth/access-token', {
-  method: 'POST',
-  headers: {
-    cookie: staff,
-    'x-bff-key': await internalExchangeKey(process.env.AUTH_COOKIE_SECRET),
-  },
-});
-assert.equal(tokenResponse.status, 201);
-const { accessToken: staffToken } = await tokenResponse.json();
+const staffToken = staff.match(/(?:^|; )access_token=([^;]+)/)?.[1];
+assert.ok(staffToken, 'Login did not set an access-token cookie');
 assert.equal(
   (
     await fetch(api + '/retail', {
@@ -267,18 +266,26 @@ try {
       201,
     );
 }
-await request(manager, '/auth/logout');
-assert.equal((await request(manager, '/retail', null, 'GET')).status, 401);
-await request(staff, '/auth/logout');
+const managerLogout = await request(manager, '/auth/logout');
+assert.equal(managerLogout.status, 303);
+assert.ok(
+  managerLogout.headers
+    .getSetCookie()
+    .some((value) => value.startsWith('access_token=;')),
+);
+assert.equal((await request('', '/retail', null, 'GET')).status, 401);
+const staffLogout = await request(staff, '/auth/logout');
+assert.equal(staffLogout.status, 303);
+assert.equal((await request(staff, '/auth/refresh')).status, 401);
 assert.equal(
   (
     await fetch(api + '/retail', {
       headers: { authorization: `Bearer ${staffToken}` },
     })
   ).status,
-  401,
+  200,
 );
 for (const cookie of [hq, other]) await request(cookie, '/auth/logout');
 console.info(
-  'PASS: OAuth, revocation, role permissions, branch isolation, validation, CSRF origin, price snapshots, order lifecycle, and concurrent stock safety.',
+  'PASS: OAuth, renewal revocation, bounded bearer staleness, conditional grants, branch isolation, validation, CSRF origin, price snapshots, order lifecycle, and concurrent stock safety.',
 );

@@ -1,18 +1,16 @@
-import { isPermission, type AuthorizationContext } from './policy.js';
+import { toAuthorizationContext, type PermissionGrant } from './policy.js';
 
 const encoder = () => new TextEncoder();
 const issuer = 'branch-co-api';
 const audience = 'branch-co-bff';
-export const accessTokenLifetimeSeconds = 60;
+export const accessTokenLifetimeSeconds = 10 * 60;
 
-export type AccessClaims = AuthorizationContext & {
+export type AccessClaims = {
   sub: string;
-  sid: string;
+  attributes: { tenantId: string; storeIds: string[] };
+  grants: PermissionGrant[];
   name: string;
-  region: string;
   role: 'CUSTOMER' | 'STORE_STAFF' | 'STORE_MANAGER' | 'HQ_ADMIN';
-  refundLimit: number;
-  customerId: string | null;
   iss: typeof issuer;
   aud: typeof audience;
   iat: number;
@@ -34,33 +32,17 @@ function decode(value: string): Uint8Array {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-async function derivedKey(secret: string, purpose: string): Promise<CryptoKey> {
+async function signingKey(secret: string): Promise<CryptoKey> {
   const raw = decode(secret);
   if (raw.length < 32)
-    throw new Error('AUTH_COOKIE_SECRET must be at least 32 bytes');
-  const material = new Uint8Array(
-    raw.length + encoder().encode(purpose).length,
-  );
-  material.set(raw);
-  material.set(encoder().encode(purpose), raw.length);
-  const digest = await crypto.subtle.digest('SHA-256', material);
+    throw new Error('AUTH_JWT_SECRET must be at least 32 bytes');
   return crypto.subtle.importKey(
     'raw',
-    digest,
+    raw,
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign', 'verify'],
   );
-}
-
-export async function internalExchangeKey(secret: string): Promise<string> {
-  const key = await derivedKey(secret, 'bff-exchange-v1');
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    encoder().encode('request-access-token'),
-  );
-  return encode(new Uint8Array(signature));
 }
 
 export async function signAccessToken(
@@ -82,7 +64,7 @@ export async function signAccessToken(
   const message = `${header}.${body}`;
   const signature = await crypto.subtle.sign(
     'HMAC',
-    await derivedKey(secret, 'access-token-v1'),
+    await signingKey(secret),
     encoder().encode(message),
   );
   return `${message}.${encode(new Uint8Array(signature))}`;
@@ -111,48 +93,33 @@ export async function verifyAccessToken(
       return null;
     const valid = await crypto.subtle.verify(
       'HMAC',
-      await derivedKey(secret, 'access-token-v1'),
+      await signingKey(secret),
       decode(signature),
       encoder().encode(`${header}.${body}`),
     );
     if (!valid) return null;
     const data: unknown = JSON.parse(new TextDecoder().decode(decode(body)));
     if (!data || typeof data !== 'object') return null;
-    const c = data as Record<string, unknown>;
+    const claims = data as Record<string, unknown>;
     const now = Math.floor(Date.now() / 1000);
     if (
-      c.iss !== issuer ||
-      c.aud !== audience ||
-      typeof c.sub !== 'string' ||
-      !c.sub ||
-      c.userId !== c.sub ||
-      typeof c.sid !== 'string' ||
-      !c.sid ||
-      typeof c.name !== 'string' ||
-      typeof c.tenantId !== 'string' ||
-      !c.tenantId ||
-      typeof c.region !== 'string' ||
-      typeof c.role !== 'string' ||
+      claims.iss !== issuer ||
+      claims.aud !== audience ||
+      typeof claims.name !== 'string' ||
+      typeof claims.role !== 'string' ||
       !['CUSTOMER', 'STORE_STAFF', 'STORE_MANAGER', 'HQ_ADMIN'].includes(
-        c.role,
+        claims.role,
       ) ||
-      typeof c.refundLimit !== 'number' ||
-      !Number.isFinite(c.refundLimit) ||
-      (c.customerId !== null && typeof c.customerId !== 'string') ||
-      !Array.isArray(c.permissions) ||
-      !c.permissions.every((value: unknown) =>
-        typeof value === 'string' ? isPermission(value) : false,
-      ) ||
-      !Array.isArray(c.storeIds) ||
-      !c.storeIds.every((value: unknown) => typeof value === 'string') ||
-      !Number.isInteger(c.iat) ||
-      !Number.isInteger(c.exp) ||
-      (c.iat as number) > now + 5 ||
-      (c.exp as number) <= now ||
-      (c.exp as number) - (c.iat as number) > accessTokenLifetimeSeconds
+      !toAuthorizationContext(claims) ||
+      !Number.isInteger(claims.iat) ||
+      !Number.isInteger(claims.exp) ||
+      (claims.iat as number) > now + 5 ||
+      (claims.exp as number) <= now ||
+      (claims.exp as number) - (claims.iat as number) >
+        accessTokenLifetimeSeconds
     )
       return null;
-    return c as AccessClaims;
+    return claims as AccessClaims;
   } catch {
     return null;
   }

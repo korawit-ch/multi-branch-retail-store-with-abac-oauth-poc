@@ -8,30 +8,37 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@repo/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AuthenticatedActor } from '../auth/auth.types';
-import { can, type Permission } from '@repo/authorization';
+import {
+  hasPermission,
+  resourceScope,
+  type Permission,
+} from '@repo/authorization';
 import type { AdjustStockDto, CreateSaleDto } from './retail.dto';
 
 @Injectable()
 export class RetailService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private scope(actor: AuthenticatedActor) {
+  private scope(actor: AuthenticatedActor, permission: Permission) {
+    const grantScope = resourceScope(actor, permission);
+    if (!grantScope?.tenantId || !grantScope.storeId)
+      throw new ForbiddenException('Permission has no store scope');
     return {
-      id: { in: actor.storeIds },
-      tenantId: actor.tenantId,
+      id: grantScope.storeId,
+      tenantId: grantScope.tenantId,
       region: actor.region,
     };
   }
 
   private require(actor: AuthenticatedActor, permission: Permission) {
-    if (!can(actor, permission))
+    if (!hasPermission(actor, permission))
       throw new ForbiddenException('Your role cannot perform this action');
   }
 
   async dashboard(actor: AuthenticatedActor) {
     this.require(actor, 'store.read');
     const stores = await this.prisma.client.store.findMany({
-      where: this.scope(actor),
+      where: this.scope(actor, 'store.read'),
       orderBy: { id: 'asc' },
       include: {
         products: { include: { product: true }, orderBy: { productId: 'asc' } },
@@ -49,7 +56,12 @@ export class RetailService {
       stores.flatMap((store) => store.orders.map((order) => order.id)),
     );
     return {
-      actor,
+      actor: {
+        id: actor.id,
+        name: actor.name,
+        role: actor.role,
+        permissions: actor.grants.map((grant) => grant.permission),
+      },
       stores: stores.map((store) => ({
         ...store,
         products: store.products.map((p) => ({ ...p, price: Number(p.price) })),
@@ -69,7 +81,7 @@ export class RetailService {
       throw new BadRequestException('A reason is required');
     return this.prisma.client.$transaction(async (tx) => {
       const item = await tx.storeProduct.findFirst({
-        where: { id, store: this.scope(actor) },
+        where: { id, store: this.scope(actor, 'inventory.adjust') },
       });
       if (!item)
         throw new ForbiddenException('Product is outside your branch scope');
@@ -77,7 +89,7 @@ export class RetailService {
         where: {
           id,
           stock: { gte: Math.max(0, -input.delta) },
-          store: this.scope(actor),
+          store: this.scope(actor, 'inventory.adjust'),
         },
         data: { stock: { increment: input.delta } },
       });
@@ -108,9 +120,9 @@ export class RetailService {
       const item = await tx.storeProduct.findFirst({
         where: {
           id: input.storeProductId,
-          store: this.scope(actor),
+          store: this.scope(actor, 'order.create'),
           isAvailable: true,
-          product: { active: true, tenantId: actor.tenantId },
+          product: { active: true, tenantId: actor.subject.tenantId },
         },
         include: { product: true },
       });
@@ -124,7 +136,7 @@ export class RetailService {
           stock: { gte: input.quantity },
           price: item.price,
           isAvailable: true,
-          store: this.scope(actor),
+          store: this.scope(actor, 'order.create'),
         },
         data: { stock: { decrement: input.quantity } },
       });
@@ -136,7 +148,7 @@ export class RetailService {
       const order = await tx.order.create({
         data: {
           id,
-          tenantId: actor.tenantId,
+          tenantId: actor.subject.tenantId,
           region: actor.region,
           storeId: item.storeId,
           customerId: 'walk-in',

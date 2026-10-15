@@ -1,4 +1,4 @@
-import { can } from '@repo/authorization';
+import { can, hasPermission, resourceScope } from '@repo/authorization';
 import { protectedRoute } from './route-policy';
 
 describe('BFF route allowlist', () => {
@@ -36,29 +36,50 @@ describe('BFF route allowlist', () => {
 
   it('shares permission, tenant, and assigned-store decisions with Nest', () => {
     const auth = {
-      userId: 'manager',
-      tenantId: 'thai-food',
-      permissions: ['order.refund'] as const,
-      storeIds: ['10'],
+      subject: {
+        userId: 'manager',
+        tenantId: 'thai-food',
+        storeIds: ['10'],
+      },
+      grants: [
+        {
+          permission: 'order.refund' as const,
+          conditions: [
+            {
+              operator: 'equals' as const,
+              subjectField: 'tenantId' as const,
+              resourceField: 'tenantId' as const,
+            },
+            {
+              operator: 'includes' as const,
+              subjectField: 'storeIds' as const,
+              resourceField: 'storeId' as const,
+            },
+          ],
+        },
+      ],
     };
+    expect(hasPermission(auth, 'order.refund')).toBe(true);
     expect(
-      can({ ...auth, permissions: [...auth.permissions] }, 'order.refund', {
+      can(auth, 'order.refund', {
         tenantId: 'thai-food',
         storeId: '10',
       }),
     ).toBe(true);
     expect(
-      can({ ...auth, permissions: [...auth.permissions] }, 'order.refund', {
+      can(auth, 'order.refund', {
         storeId: '42',
       }),
     ).toBe(false);
     expect(
-      can({ ...auth, permissions: [...auth.permissions] }, 'order.refund', {
+      can(auth, 'order.refund', {
         tenantId: 'other-company',
       }),
     ).toBe(false);
-    expect(
-      can({ ...auth, permissions: [...auth.permissions] }, 'order.create'),
-    ).toBe(false);
+    expect(hasPermission(auth, 'order.create')).toBe(false);
+    expect(resourceScope(auth, 'order.refund')).toEqual({
+      tenantId: 'thai-food',
+      storeId: { in: ['10'] },
+    });
   });
 });

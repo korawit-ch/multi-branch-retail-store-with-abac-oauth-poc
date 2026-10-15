@@ -3,18 +3,21 @@ import { Prisma } from '@repo/prisma';
 import type { AuthenticatedActor } from '../auth/auth.types';
 import type { PrismaService } from '../prisma/prisma.service';
 import { RetailService } from './retail.service';
+import { buildPermissionGrants } from '../auth/authorization-policy';
 
 const actor: AuthenticatedActor = {
   id: 'manager',
-  userId: 'manager',
   name: 'Manager',
   role: 'STORE_MANAGER',
-  tenantId: 'thai-food',
   region: 'TH',
   refundLimit: 500,
   customerId: null,
-  storeIds: ['10'],
-  permissions: ['store.read', 'inventory.adjust', 'order.create'],
+  subject: { userId: 'manager', tenantId: 'thai-food', storeIds: ['10'] },
+  grants: buildPermissionGrants('STORE_MANAGER', [
+    'store.read',
+    'inventory.adjust',
+    'order.create',
+  ]),
 };
 function setup() {
   const tx = {
@@ -40,10 +43,14 @@ describe('Retail authorization and stock invariants', () => {
   it('denies staff stock writes before opening a transaction', async () => {
     const { service, client } = setup();
     await expect(
-      service.adjust({ ...actor, permissions: ['store.read'] }, '10-coffee', {
-        delta: 10,
-        reason: 'Delivery',
-      }),
+      service.adjust(
+        { ...actor, grants: actor.grants.slice(0, 1) },
+        '10-coffee',
+        {
+          delta: 10,
+          reason: 'Delivery',
+        },
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(client.$transaction).not.toHaveBeenCalled();
   });

@@ -54,8 +54,6 @@ export interface AccessSummary {
   actor: {
     name: string;
     role: 'CUSTOMER' | 'STORE_STAFF' | 'STORE_MANAGER' | 'HQ_ADMIN';
-    storeIds: string[];
-    tenantId: string;
   };
   examples: Array<{ label: string; allowed: boolean; reason: string }>;
 }

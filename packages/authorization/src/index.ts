@@ -1,13 +1,24 @@
-export { permissions, isPermission, can } from './policy.js';
+export {
+  permissions,
+  isPermission,
+  toAuthorizationContext,
+  hasPermission,
+  can,
+  resourceScope,
+} from './policy.js';
 export type {
   Permission,
   AuthorizationContext,
-  AuthorizationOptions,
+  SubjectAttributes,
+  ResourceAttributes,
+  ResourceField,
+  ResourceScope,
+  GrantCondition,
+  PermissionGrant,
 } from './policy.js';
 
 export {
   accessTokenLifetimeSeconds,
-  internalExchangeKey,
   signAccessToken,
   verifyAccessToken,
 } from './access-token.js';
