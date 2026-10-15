@@ -6,7 +6,7 @@
 
 The browser-facing API base is same-origin `/api/bff`. Next forwards protected routes to Nest at `API_INTERNAL_URL` (local fallback `http://localhost:${API_PORT || 3001}`). Direct Nest API clients use that internal address and a bearer JWT. There is no `/v1` prefix. Swagger is mounted at `/api`, but its template-focused annotations do not fully specify retail behavior. This guide follows controllers, DTOs, services, and [shared contracts](../packages/api-client/src/index.ts).
 
-Browser requests send the opaque `app_session` cookie to Next with `credentials: 'include'`. Next exchanges it for a 60-second bearer JWT, verifies it, checks `can()`, and forwards the JWT to Nest. Direct cookie-only Nest retail/order calls return 401. Nest independently verifies bearer tokens and active sessions. Retail/order mutations require an exact Origin equal to `WEB_ORIGIN` (default `http://localhost:3000`) at Nest; Next also checks browser Origin before forwarding. Auth logout routes compare against `WEB_URL` with `WEB_ORIGIN` fallback. An absent Origin is rejected by those checks.
+Browser requests send an HttpOnly `access_token` cookie to Next with `credentials: 'include'`. Next verifies the ten-minute JWT, checks its named grant with `hasPermission()`, and forwards it to Nest. On 401, the browser fetch helper makes one `POST /auth/refresh` using the separate opaque `app_session` cookie and retries once. Direct cookie-only Nest retail/order calls return 401. Nest independently verifies bearer tokens and derives tenant/store query scope from typed grant conditions; it does not look up the session row on ordinary domain requests. Retail/order mutations require an exact Origin equal to `WEB_ORIGIN` (default `http://localhost:3000`) at Nest; Next also checks browser Origin before forwarding. Auth refresh/logout routes compare against `WEB_URL` with `WEB_ORIGIN` fallback. An absent Origin is rejected by those checks.
 
 POST retail/refund handlers use Nest's default success status 201; GET and PATCH handlers return 200. Successful auth redirects normally use 302; logout uses 303. Error bodies generally follow Nest's `{ "message": ..., "error": ..., "statusCode": ... }` shape. Validation messages may be arrays; callers should not depend on one fixed error string for every failure.
 
@@ -19,27 +19,23 @@ Implemented in [AuthController](../apps/api/src/auth/auth.controller.ts). Browse
 - **GET `/auth/login?persona=mock-manager-10`**: starts the development flow, sets `oauth_attempt`, redirects to the local provider. No current session required.
 - **GET `/mock-provider/authorize`**: expects the flow's response type, client ID, callback URI, state, S256 challenge, and optional persona. Returns a callback redirect or 400 for invalid authorization parameters.
 - **POST `/mock-provider/token`**: body `{ "code": "...", "codeVerifier": "...", "redirectUri": "..." }`; returns `{ "subject": "...", "displayName": "..." }` with 200, or `{ "error": "invalid_grant" }` with 400 for an invalid exchange. This is a custom mock identity response, not a real OAuth token response. Wrong runtime field types are not comprehensively DTO-validated.
-- **GET `/auth/callback?code=...&state=...`**: validates the attempt, exchanges the code, creates a session, and redirects to the web dashboard. Normal login failure redirects to the home error query; unexpected failures can still become server errors.
-- **POST `/auth/access-token`**: internal BFF exchange requiring an opaque session cookie and the server-derived `x-bff-key`; returns `{ "accessToken": "...", "tokenType": "Bearer", "expiresIn": 60 }` with no-store caching. It is not a browser endpoint.
-- **POST `/auth/logout`**: trusted origin; revokes the current session when identifiable, clears the cookie, and redirects to the web app.
-- **POST `/auth/logout-all`**: trusted origin; with an active session, revokes the user's unrevoked sessions. Missing/invalid sessions revoke zero rows. Either way, it clears the cookie and redirects.
+- **GET `/auth/callback?code=...&state=...`**: validates the attempt, exchanges the code, creates a session, builds conditional grants, sets both application and access cookies, and redirects to the web dashboard. Normal login failure redirects to the home error query; unexpected failures can still become server errors.
+- **POST `/auth/refresh`**: trusted origin and active opaque session required; reloads role/assignments and sets a new ten-minute HttpOnly `access_token` cookie, returning 204. Revoked/expired sessions return 401. The browser calls this through Next after an access-token 401.
+- **POST `/auth/logout`**: trusted origin; revokes the current session when identifiable, clears both cookies, and redirects to the web app.
+- **POST `/auth/logout-all`**: trusted origin; with an active session, revokes the user's unrevoked sessions. Missing/invalid sessions revoke zero rows. Either way, it clears both cookies and redirects.
 
 Mock-provider operations are disabled in production. Full details: [authentication guide](03-authentication-and-sessions.md).
 
 ## GET `/retail`
 
-Requires a valid bearer JWT tied to an active database session and `store.read`. The BFF checks the permission first for browser requests. Returns the actor and only assigned stores in the actor's tenant/region. The following is an abbreviated shape, not a complete fixture:
+Requires a valid bearer JWT with `store.read`. The BFF checks the named grant first for browser requests. Nest resolves the grant's tenant/store scope and current region. Returns a limited actor presentation object and only matching stores. The following is an abbreviated shape, not a complete fixture:
 
 ```json
 {
   "actor": {
     "id": "mock-manager-10",
     "role": "STORE_MANAGER",
-    "tenantId": "thai-food",
-    "region": "TH",
-    "storeIds": ["10"],
-    "permissions": ["store.read", "order.refund"],
-    "refundLimit": 500
+    "permissions": ["store.read", "order.refund"]
   },
   "stores": [
     {
@@ -55,11 +51,11 @@ Requires a valid bearer JWT tied to an active database session and `store.read`.
 
 Product listings include ID, numeric price, stock, availability, and catalog information. Orders include numeric total, timestamp, receipt items, and `capabilities.refund`. Audits include actor, action, detail, and timestamp. The service currently spreads Prisma objects, so wire responses contain additional fields beyond the smaller shared interface. The contract is not an exact field allowlist.
 
-Orders are limited to 50 and audits to 15 per store. No page cursor or aggregate-report endpoint exists. A valid actor without store assignments can receive an empty stores array. Missing permission yields 403; invalid session yields 401.
+Orders are limited to 50 and audits to 15 per store. No page cursor or aggregate-report endpoint exists. A valid actor without store assignments can receive an empty stores array. Missing permission yields 403; invalid/expired access token yields 401.
 
 ## POST `/retail/sales`
 
-Requires trusted origin, valid JWT and active session, `order.create`, authorized branch, available listing, active tenant product, and sufficient stock.
+Requires trusted origin, valid JWT with `order.create`, grant-scoped branch, available listing, active tenant product, and sufficient stock.
 
 ```json
 { "storeProductId": "10-coffee", "quantity": 2 }
@@ -71,7 +67,7 @@ Validation failures and stock/price conflicts produce 400. Missing permission or
 
 ## POST `/retail/inventory/:id/adjust`
 
-`:id` is the StoreProduct ID, not the Product ID. Requires trusted origin, valid JWT and active session, `inventory.adjust`, and assigned-branch scope.
+`:id` is the StoreProduct ID, not the Product ID. Requires trusted origin, valid JWT with `inventory.adjust`, and grant-scoped branch.
 
 ```json
 { "delta": 10, "reason": "Received morning delivery" }
@@ -81,13 +77,13 @@ Delta: nonzero integer -10000 through 10000. Reason: string length 3–120 befor
 
 ## GET `/orders/:id`
 
-Requires a valid JWT, active session, and `order.read`. Workforce actors need the assigned branch; customers need matching customer ownership. Both require matching tenant and region. Returns order fields with numeric total and refund capability. This handler does not load OrderItem relations; use the dashboard's orders for the existing receipt display.
+Requires a valid JWT with `order.read`. Workforce actors need grant-scoped branch membership; customers need current matching customer ownership. Both require matching tenant and current region. Returns order fields with numeric total and refund capability. This handler does not load OrderItem relations; use the dashboard's orders for the existing receipt display.
 
 Missing or unauthorized order returns 403. The shared `OrderResponse` omits some fields actually serialized by the service, such as timestamps.
 
 ## PATCH `/orders/:id`
 
-Requires trusted origin, valid JWT and active session, `order.update_status`, and assigned-branch scope.
+Requires trusted origin, valid JWT with `order.update_status`, and grant-scoped branch.
 
 ```json
 { "status": "PREPARING" }
@@ -103,13 +99,13 @@ Valid transitions are PAID → PREPARING and PREPARING → READY. Other enum val
 
 ## POST `/orders/:id/refund`
 
-No body is required. Requires trusted origin, valid JWT and active session, `order.refund`, matching tenant/region/assigned branch, PAID status, and total within the actor's refund limit.
+No body is required. Requires trusted origin, valid JWT with `order.refund`, grant-scoped tenant/branch, current region, PAID status, and total within the actor's current refund limit.
 
 Returns 201 with `{ "orderId": "901", "status": "REFUNDED" }`. Permission, scope, limit, status, and repeat-refund failures return 403. There is no supported override argument. A successful call changes only status.
 
 ## GET `/orders/access-summary`
 
-Requires a valid JWT and active database session. Returns a limited actor summary and `examples: [{ label, allowed, reason }]`. Each example tests current grants and SQL resource scope against hardcoded seeded IDs. The controller declares this route before `/orders/:id`. It is a teaching endpoint, not a complete permissions API.
+Requires a valid JWT. Returns a limited actor summary and `examples: [{ label, allowed, reason }]`. Each example tests signed grants and current SQL resource/business scope against hardcoded seeded IDs. The controller declares this route before `/orders/:id`. It is a teaching endpoint, not a complete permissions API.
 
 ## Public template routes
 

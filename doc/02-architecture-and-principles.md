@@ -10,7 +10,7 @@ The [root manifest](../package.json) defines npm workspaces under `apps/*` and `
 - `apps/api`: NestJS 11. Owns authentication, request validation, permission/resource checks, retail transactions, and error responses.
 - `apps/db`: PostgreSQL 16 Docker Compose service for local development.
 - `packages/prisma`: Prisma 7 schema, SQL migrations, seed, generated client integration, and PostgreSQL adapter/pool.
-- `packages/authorization`: shared runtime-independent permission vocabulary, `can()` policy, and server-used JWT format/signature functions.
+- `packages/authorization`: shared runtime-independent permission vocabulary, typed grant validation, `hasPermission()`/`can()`/`resourceScope()`, and server-used JWT format/signature functions.
 - `packages/api-client`: typed endpoint descriptors and serialized response interfaces. It does not perform fetches or depend on React/Next.js runtime APIs. It has a Prisma package dependency for shared model types.
 - `packages/ui`: shared UI components and form primitives. The dashboard reuses the shared Button; its operational forms use native FormData.
 - `packages/design-system`, `packages/icons`: common presentation assets and styling infrastructure.
@@ -22,32 +22,31 @@ The package manifest and API root response still contain template-era names. Pro
 
 ```mermaid
 flowchart TD
-  Browser[Browser with opaque cookie] --> Pages[Next.js pages and BFF]
-  Pages -->|Cookie exchange| Auth[NestJS auth]
+  Browser[Browser with session and access cookies] --> Pages[Next.js pages and BFF]
+  Browser -->|Login or refresh| Auth[NestJS auth]
   Auth --> Sessions[(PostgreSQL AuthSession)]
-  Auth -->|60-second JWT| Pages
+  Auth -->|Ten-minute signed access cookie| Browser
   Pages -->|Bearer JWT| Controller[NestJS protected controller]
-  Controller -->|JWT signature and session revocation| Sessions
-  Controller --> Service[RetailService or OrdersService]
-  Service --> Policy[Shared can plus scoped Prisma predicates]
+  Controller -->|JWT verification and current user attributes| Service[RetailService or OrdersService]
+  Service --> Policy[Grant-derived scope plus current business predicates]
   Policy --> Prisma[Prisma client]
   Prisma --> DB[(PostgreSQL retail data)]
 ```
 
 Endpoint descriptors in `@repo/api-client` describe method, URL, optional body, and inferred response type. The web application's client and server fetch helpers execute those descriptors through the same-origin BFF. This preserves the template's separation between contracts and transport.
 
-On protected browser requests, Next exchanges the opaque session for a short-lived JWT, verifies it, and checks shared `can()`. Nest independently verifies that JWT and its database session, then controllers/services recheck permissions and put tenant/region/store conditions into database queries. See the [BFF architecture guide](12-bff-authentication-architecture.md). DTO validation is registered globally in [main.ts](../apps/api/src/main.ts). Depending on Nest's request lifecycle, invalid DTOs may fail before controller authentication; do not treat a validation response as proof that a caller is authenticated.
+On protected browser requests, Next verifies the access JWT and checks shared `hasPermission()`. Nest independently verifies it, reloads current user domain attributes, and resolves typed grant conditions into database scope. An expired token triggers one session-backed refresh and retry in the browser fetch helper. See the [BFF architecture guide](12-bff-authentication-architecture.md). DTO validation is registered globally in [main.ts](../apps/api/src/main.ts). Depending on Nest's request lifecycle, invalid DTOs may fail before controller authentication; do not treat a validation response as proof that a caller is authenticated.
 
 Authentication is not a global guard. The inherited Links routes remain public in Nest and are publicly proxied by the BFF. New controllers must deliberately apply the appropriate protection.
 
 ## Sources of truth
 
 1. **Database structure:** [Prisma schema](../packages/prisma/prisma/schema.prisma) plus [SQL migrations](../packages/prisma/prisma/migrations). Several CHECK constraints exist only in SQL.
-2. **Current identity and grants:** User, Role, Permission, RolePermission, UserStore, and AuthSession rows, loaded at each BFF token exchange. The JWT is the short-lived authorization snapshot; Nest also rechecks session revocation on each protected request.
+2. **Identity and grants:** User, Role, Permission, RolePermission, UserStore, and AuthSession rows, loaded at login/refresh. The JWT holds a ten-minute conditional grant snapshot. Nest does not check session revocation on each domain request; it loads current user domain attributes and checks the database session at refresh.
 3. **Current stock and branch price:** StoreProduct. InventoryMovement explains changes but is not replayed to compute stock on each request.
 4. **Historical receipt:** OrderItem's price and product-name snapshots, with Order.total computed on the server.
 5. **Refund eligibility:** [refund.policy.ts](../apps/api/src/orders/refund.policy.ts), reused by capabilities and the conditional write.
-6. **Shared permission checks:** [the authorization package](../packages/authorization/src/policy.ts) defines `can()` for role grant and optional tenant/store membership.
+6. **Shared permission checks:** [the authorization package](../packages/authorization/src/policy.ts) validates typed grants, checks named permission and resource conditions, and resolves matching query scope.
 7. **Transport contracts:** `packages/api-client` interfaces and endpoint descriptors. These are handwritten TypeScript contracts, not generated runtime validators.
 8. **UI state:** TanStack Query stores server snapshots; component state stores branch selection, forms, search, and the demonstration override.
 
@@ -61,7 +60,7 @@ OrderItem intentionally duplicates the product name and price charged. A receipt
 
 ### Authorize the operation and the resource
 
-Shared `can()` checks a permission such as `order.refund` and optional tenant/store attributes. This answers whether an actor may perform that kind of operation within a named scope. It does not answer whether a particular order belongs to their tenant, region, branch, or limit. Scoped SQL predicates add those conditions. HQ uses the same scoping mechanism as other staff.
+Shared `hasPermission()` checks a named grant; `can()` evaluates its typed conditions against trusted resource attributes; `resourceScope()` resolves the same conditions into plain tenant/store filters. Nest adds current region, customer ownership, and mutable business predicates to scoped SQL. HQ uses the same mechanism as other staff.
 
 ### Enforce mutable conditions at the write
 

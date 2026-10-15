@@ -16,13 +16,13 @@ Use Node 22.12+ and Docker. Installation creates `.env` from `.env.example` if a
 npm ci
 ```
 
-Set `AUTH_COOKIE_SECRET` in `.env` to a random base64url secret (at least 32 bytes). Generate a value locally with:
+Set independent `AUTH_COOKIE_SECRET` and `AUTH_JWT_SECRET` values in `.env`, each a random base64url secret of at least 32 bytes. Run this command twice:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Check `DATABASE_URL`, `API_PORT`, `API_INTERNAL_URL`, `WEB_ORIGIN`, and `WEB_URL` in `.env`. Both servers need the same private `AUTH_COOKIE_SECRET`. Then:
+Check `DATABASE_URL`, `API_PORT`, `API_INTERNAL_URL`, `WEB_ORIGIN`, and `WEB_URL` in `.env`. Both servers need the same private `AUTH_JWT_SECRET`; Nest uses `AUTH_COOKIE_SECRET` to encrypt opaque cookies. Then:
 
 ```sh
 npm run env:distribute
@@ -78,7 +78,7 @@ Payment attempts/refunds, promotions, external providers, webhook ingestion, mul
 - Sale and adjustment write stock, history, and audit together in a transaction.
 - Stock decrement uses a conditional atomic update, so concurrent requests cannot oversell.
 - Price and product name come from the server; the client submits only product identity and quantity.
-- Writes validate the browser origin. Session permissions are reloaded from PostgreSQL for every request.
+- Writes validate the browser origin. Role permissions and assignments are reloaded from PostgreSQL at login and refresh, while current domain attributes are read at each Nest request.
 - Read results cap orders at the latest 50 per branch and audit events at 15. Sales cards summarize that window, not all-time revenue.
 - Audit history here covers sale creation and stock adjustments. The inherited order-status endpoint is not audited.
 
@@ -94,7 +94,7 @@ npm run lint --workspace=@repo/api-client
 npm run test:retail
 ```
 
-`test:retail` requires running Next.js and NestJS servers with a seeded development API configured through `.env`. It creates one test sale and audit entries, restores the tested product's starting stock, and revokes its own sessions. Run it only on a local demo database. It checks OAuth login, session revocation, role denials, branch isolation, invalid inputs, untrusted origins, negative stock, server-owned receipt prices, order transitions, and two concurrent requests competing for one available unit.
+`test:retail` requires running Next.js and NestJS servers with a seeded development API configured through `.env`. It creates one test sale and audit entries, restores the tested product's starting stock, and revokes its own renewal sessions. Run it only on a local demo database. It checks OAuth login, revoked refresh, bounded access-token staleness, role denials, branch isolation, invalid inputs, untrusted origins, negative stock, server-owned receipt prices, order transitions, and two concurrent requests competing for one available unit.
 
 The local mock provider does not authenticate real people. Code replay protection is process-local and production mode disables the mock. Real deployment requires an actual OAuth/OIDC provider adapter and durable one-time authorization flow storage; no provider credentials are required for this demo.
 

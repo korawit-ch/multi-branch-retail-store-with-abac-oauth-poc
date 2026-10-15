@@ -1,4 +1,4 @@
-# Proxied mock login, revocable sessions, and short-lived access tokens
+# Proxied mock login, conditional grants, and renewable access tokens
 
 NestJS owns the OAuth-style login flow and PostgreSQL-backed application sessions. Next.js proxies the browser-facing login/callback, renders the dashboard, and handles same-origin `/api/bff` requests. The local provider is a teaching stand-in, not ThaiD, and does not authenticate a real person.
 
@@ -10,11 +10,12 @@ NestJS owns the OAuth-style login flow and PostgreSQL-backed application session
 4. NestJS validates state and expiry, exchanges the code with the verifier, and maps the subject to an application `User`.
 5. NestJS creates an `AuthSession` row containing a SHA-256 hash of a new random token.
 6. The encrypted `app_session` cookie contains the raw token and expiry, not identity or permission claims.
-7. Next.js exchanges the opaque cookie for a 60-second signed access JWT, verifies it, and checks the shared `can()` policy.
-8. NestJS verifies the bearer JWT, checks that its session is not revoked, and applies `can()` and scoped domain queries again.
-9. Current-session logout revokes one row; all-device logout revokes every active row for the current user.
+7. Nest builds typed conditional grants from role permissions and assignments, signs a ten-minute JWT, and sets a separate HttpOnly `access_token` cookie.
+8. Next verifies that JWT and its named grant; Nest verifies it again and derives tenant/store database scope from its conditions. Current business rules remain in domain services.
+9. On access-token 401, the browser makes one same-origin refresh attempt. Nest checks the revocable session, rebuilds grants, and sets a fresh access cookie.
+10. Current-session logout revokes one row; all-device logout revokes every active row for the current user. Both clear browser cookies.
 
-The temporary OAuth attempt remains cookie-backed. Application sessions are database-backed so PostgreSQL can reject a copied cookie or a previously issued JWT after revocation.
+The temporary OAuth attempt remains cookie-backed. PostgreSQL rejects a copied renewal cookie after revocation. An already-issued access JWT can remain valid until its ten-minute expiry, including after logout or a grant change.
 
 ## Run
 

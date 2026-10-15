@@ -48,7 +48,7 @@ Inspect the signed-in role and its grants. The API independently checks permissi
 - **Inventory:** add or remove stock with a reason, with low-stock indicators below 10 units.
 - **Activity:** view the latest sale and inventory-adjustment audit events for a branch.
 - **Authentication:** authorization-code redirects, state validation, PKCE, encrypted HttpOnly cookies, and revocable database sessions.
-- **Authorization:** role permissions determine what a user may do; tenant, region, and store assignments determine which resources they may access.
+- **Authorization:** Nest builds a typed conditional grant matrix from role permissions and assignments; scoped database queries enforce tenant, branch, region, and current business rules.
 
 The overview summarizes the **latest 50 orders per branch**, excluding refunded orders from the sales card. Activity shows the latest 15 events.
 
@@ -61,25 +61,27 @@ The overview summarizes the **latest 50 orders per branch**, excluding refunded 
 
 The retail workspace uses `store.read`, `order.read`, `order.create`, `order.update_status`, and `inventory.adjust`. The inherited customer identity remains API-only; customers cannot open the store-manager workspace.
 
-Hiding or disabling a button is only a UI aid. Next.js checks a short-lived authorization snapshot before proxying protected requests. NestJS independently verifies the token and session, then enforces resource scope and business rules.
+Hiding or disabling a button is only a UI aid. Next.js verifies a ten-minute access token and checks its named grant before proxying. NestJS independently verifies the token, derives database scope from the signed grant conditions, and enforces current business rules. Logout stops renewal immediately; a copied access token can remain valid until expiry.
+
+Open **My access** in the dashboard to compare coarse role grants with backend-computed conditional access examples. For example, a manager may have `order.refund` yet be denied for another branch, a non-PAID order, or an amount above their current limit. The signed grant matrix stays server-side; React only renders these decisions and refund capabilities.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Browser[Browser with opaque cookie] --> BFF[Next.js BFF]
-  BFF -->|Session exchange| Auth[NestJS auth]
+  Browser[Browser with session and access cookies] --> BFF[Next.js BFF]
+  BFF -->|Login or refresh proxy| Auth[NestJS auth]
   Auth --> Sessions[(PostgreSQL sessions)]
-  Auth -->|Short-lived JWT| BFF
+  Auth -->|Signed grant JWT cookie| Browser
   BFF -->|Bearer JWT| API[NestJS retail API]
   API --> Prisma[Prisma]
   Prisma --> DB[(PostgreSQL)]
 ```
 
 - **Frontend:** Next.js App Router and React; TanStack Query handles API state through the frontend-owned fetch client.
-- **Backend:** NestJS owns session exchange, JWT verification, validated DTOs, independent authorization, and business transactions.
+- **Backend:** NestJS owns session renewal, grant construction, JWT verification, scoped authorization, validated DTOs, and business transactions.
 - **Database:** Prisma models and SQL migrations define relationships, indexes, and constraints.
-- **Shared packages:** runtime-independent API contracts and `can()` policy, reusable UI and icons, design-system styles, and common lint/test/TypeScript configuration.
+- **Shared packages:** runtime-independent API contracts and typed grant evaluation/query-scope policy, reusable UI and icons, design-system styles, and common lint/test/TypeScript configuration.
 
 ```text
 apps/
@@ -88,6 +90,7 @@ apps/
   db/                   PostgreSQL Docker Compose service
 packages/
   api-client/           Typed endpoint contracts and response types
+  authorization/        Grant vocabulary, validation, evaluation, and query scope
   prisma/               Schema, migrations, seed, and shared Prisma client
   ui/                   Shared UI components
   design-system/        Shared styling and design tokens
@@ -113,7 +116,7 @@ Installation creates `.env` from `.env.example` if it does not already exist.
 
 ### 2. Configure the environment
 
-Generate a secret and put its value in `AUTH_COOKIE_SECRET` in `.env`:
+Run this twice and put independent values in `AUTH_COOKIE_SECRET` and `AUTH_JWT_SECRET` in `.env`:
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -123,7 +126,8 @@ Check these settings in `.env`:
 
 - `DATABASE_URL`: PostgreSQL connection string. Keep it aligned with `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and `DB_PORT`; update it explicitly when changing database settings.
 - `API_PORT`: NestJS listener port. `API_INTERNAL_URL` is the private server-to-server NestJS URL, defaulting to this local port.
-- `AUTH_COOKIE_SECRET`: shared privately by Next.js and NestJS for distinct cookie, exchange, and JWT keys.
+- `AUTH_COOKIE_SECRET`: encrypts the login attempt and opaque application session; keep it private to NestJS.
+- `AUTH_JWT_SECRET`: independent signing secret shared privately by Next.js and NestJS; never expose it through a `NEXT_PUBLIC_` setting.
 - Browser API requests use same-origin `/api/bff`; the legacy `API_PUBLIC_URL` and `NEXT_PUBLIC_API` settings are no longer used for the protected UI flow.
 - `WEB_ORIGIN` and `WEB_URL`: frontend origin and post-login destination. They must match the actual frontend URL.
 - `NODE_ENV=development`: enables the local mock sign-in flow.
@@ -208,7 +212,7 @@ npm run lint --workspace=@repo/api-client
 npm run test:retail
 ```
 
-`test:retail` requires running Next.js and NestJS servers plus a seeded development API and reads its URLs from `.env`. It verifies OAuth login, session revocation, role denials, branch isolation, input validation, trusted-origin checks, receipt prices, order transitions, and concurrent stock protection.
+`test:retail` requires running Next.js and NestJS servers plus a seeded development API and reads its URLs from `.env`. It verifies OAuth login, revoked renewal, bounded bearer-token staleness, role denials, branch isolation, input validation, trusted-origin checks, receipt prices, order transitions, and concurrent stock protection.
 
 **Run it only against a local demo database:** it creates a test sale and audit entries, restores the tested product's starting stock, and revokes its test sessions.
 

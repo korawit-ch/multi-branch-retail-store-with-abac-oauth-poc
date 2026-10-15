@@ -12,7 +12,7 @@ The root layout/providers install shared styling and the query provider. Reusabl
 
 ## Transport and contracts
 
-[clientFetch](../apps/web/lib/fetch/client.ts) executes descriptors from `@repo/api-client` through same-origin `/api/bff`, includes the opaque cookie, and parses JSON. HTTP failures become `ApiError(status, message, responseBody)`; network errors do not have an HTTP status. The [server fetch helper](../apps/web/lib/fetch/server.ts) calls the same BFF with forwarded cookies for server-side use and uses `cache: 'no-store'`.
+[clientFetch](../apps/web/lib/fetch/client.ts) executes descriptors from `@repo/api-client` through same-origin `/api/bff`, includes HttpOnly cookies, and parses JSON. On 401 it coalesces one `POST /auth/refresh` attempt per page instance and retries the original request once. It does not refresh after 403. HTTP failures become `ApiError(status, message, responseBody)`; network errors do not have an HTTP status. The [server fetch helper](../apps/web/lib/fetch/server.ts) calls the same BFF with forwarded cookies for server-side use and uses `cache: 'no-store'`.
 
 Home login links and dashboard logout forms use same-origin `/auth/*` routes. Client fetch uses `/api/bff`. Next calls Nest using private `API_INTERNAL_URL`; the browser does not read it. Keep `WEB_URL` and `WEB_ORIGIN` aligned with the browser origin.
 
@@ -20,7 +20,7 @@ Public Next environment variables belong in browser configuration, never in secr
 
 ## Server state versus local state
 
-[QueryProvider](../apps/web/lib/query/provider.tsx) creates one QueryClient per mounted provider. Defaults use a one-minute stale time and disable refetch on window focus. The dashboard query key is `['retail']` and retries are disabled.
+[QueryProvider](../apps/web/lib/query/provider.tsx) creates one QueryClient per mounted provider. Defaults use a one-minute stale time and disable refetch on window focus. The dashboard query key is `['retail']` and retries are disabled. My access examples use a separate `['access-summary']` query only while that section is open.
 
 Server state consists of the actor, accessible stores, branch inventory, order snapshots, audit entries, and refund capabilities. Local state consists of the selected section/branch, product search, sale/adjustment dialogs, success notice, refund result panel, and demo override checkbox.
 
@@ -34,7 +34,7 @@ Refunds use their own mutation so the demo can show the endpoint, status, and JS
 
 ## Permission-aware controls
 
-Inventory/sale controls use shared `can()` with the returned actor. Order preparation controls also inspect PAID/PREPARING status. Refunds consume `order.capabilities.refund.allowed` and the backend explanation.
+Inventory/sale controls use coarse permission names returned with the dashboard. React does not receive or evaluate the signed conditional grant matrix. Order preparation controls also inspect PAID/PREPARING status. Refunds consume `order.capabilities.refund.allowed` and the backend explanation. The My access section displays backend-computed seeded access examples without rebuilding tenant/store policy in the browser.
 
 The override checkbox only bypasses the refund button's eligibility-based disabled condition. Busy state remains enforced. It sends no elevated permission to either server. A missing permission is denied by the BFF; Nest independently checks direct bearer calls. Branch changes reset the checkbox and result; page reloads reset all component-local state. See the [capability guide](04-authorization-and-capabilities.md).
 
@@ -44,11 +44,11 @@ The display currently hardcodes successful refund status 201. Error status comes
 
 The dashboard provides loading, unavailable-workspace, retry, empty-order, mutation-error, success-notice, and pending-control states. Labels identify refund buttons by order ID. Forms use native inputs and FormData; shared React Hook Form primitives elsewhere in the template do not mean this dashboard uses them.
 
-A production UX pass should verify dialog focus entry/return and trapping, Escape behavior, background interaction, announcement of asynchronous errors, keyboard-only workflows, mobile tables, and contrast. Existing frontend tests cover FeatureBadge rather than these dashboard interactions; visual inspection is not automated coverage.
+A production UX pass should verify dialog focus entry/return and trapping, Escape behavior, background interaction, announcement of asynchronous errors, keyboard-only workflows, mobile tables, and contrast. Existing frontend tests cover the fetch retry behavior and FeatureBadge, not these dashboard interactions; visual inspection is not automated coverage.
 
 ## Safe extension pattern
 
-1. Define the permission in the shared authorization vocabulary and the authoritative business behavior/validation in Nest.
+1. Define the permission in the shared authorization vocabulary, its backend grant-builder conditions, and the authoritative business behavior/validation in Nest.
 2. Add an explicit BFF route permission and an independent Nest check; update the shared endpoint/body/response contract.
 3. Use the existing fetch helper and query provider.
 4. Keep temporary form state local; invalidate the relevant server query after writes.

@@ -4,56 +4,56 @@
 
 ## Identity boundary
 
-This repository uses a local mock authorization-code flow with state and PKCE. It demonstrates the redirects and proof-of-possession mechanics, but choosing a seeded persona is sufficient to claim that identity in development. It is not a real OAuth/OIDC provider. The mock rejects use when `NODE_ENV` is exactly `production`; no production provider adapter is implemented.
+This repository uses a local mock authorization-code flow with state and PKCE. Selecting a seeded persona is sufficient to claim that identity in development. It is not a real OAuth/OIDC provider. The mock rejects use when `NODE_ENV` is exactly `production`; no production provider adapter is implemented.
 
-NestJS still owns authorization-code creation/exchange, identity mapping, application sessions, and revocation. Next.js now proxies the browser-facing auth paths so the browser receives cookies from its own origin. This preserves the existing mock flow while placing protected API calls behind Next.
+Nest owns authorization-code creation/exchange, identity mapping, application sessions, and access-token issuance. Next proxies the browser-facing auth paths so cookies stay on the web origin.
 
 ## Login sequence
 
 ```mermaid
 sequenceDiagram
   participant B as Browser
-  participant N as Next.js auth proxy
-  participant A as NestJS auth
+  participant N as Next auth proxy
+  participant A as Nest auth
   participant D as PostgreSQL
   B->>N: GET /auth/login?persona=mock-manager-10
   N->>A: Forward login
-  A-->>N: Set oauth_attempt; redirect to web /mock-provider/authorize
+  A-->>N: oauth_attempt cookie + provider redirect
   N-->>B: Forward cookie and redirect
   B->>N: GET /mock-provider/authorize
   N->>A: Forward authorization request
-  A->>D: Look up selected mock user
-  A-->>B: Redirect through Next to /auth/callback
+  A-->>B: Redirect through Next to callback
   B->>N: GET /auth/callback with attempt cookie
   N->>A: Forward callback and cookie
-  A->>A: Validate state and redeem code using PKCE
-  A->>D: Insert hashed application session
-  A-->>N: Set app_session; redirect /dashboard
-  N-->>B: Forward cookie and redirect
+  A->>A: Validate state and redeem code with PKCE
+  A->>D: Create hashed application session
+  A->>D: Load current role grants and store assignments
+  A-->>N: app_session + access_token cookies; redirect
+  N-->>B: Forward cookies and dashboard redirect
 ```
 
-The [AuthService](../apps/api/src/auth/auth.service.ts) generates random state and a PKCE verifier. An encrypted `oauth_attempt` cookie lasts five minutes. The mock code expires after 60 seconds, binds the redirect URI and challenge, and is consumed once in the issuing API process. The callback validates state, then Nest redeems the code against its private `/mock-provider/token` route using `API_INTERNAL_URL` (or the local port fallback). The mock returns subject and display name rather than a standards-based provider token. [SessionService](../apps/api/src/auth/session.service.ts) requires a matching existing user ID and name.
+[AuthService](../apps/api/src/auth/auth.service.ts) generates random state and a PKCE verifier. An encrypted `oauth_attempt` cookie lasts five minutes. The mock code expires after 60 seconds, binds the redirect URI and challenge, and is consumed once in the issuing API process. The callback validates state and redeems the code against Nest's private `/mock-provider/token` route. The mock returns subject and display name rather than a standards-based provider token. [SessionService](../apps/api/src/auth/session.service.ts) requires a matching existing user ID and name.
 
-The public redirect URI is based on `WEB_URL`, then `WEB_ORIGIN`, so it points at the Next proxy. An unconfigured web URL falls back to the request protocol/Host in the auth controller; configure an explicit trusted URL for deployment. Failure clears the attempt and normally redirects to `/?error=login_failed`.
+The public callback URI uses `WEB_URL`, then `WEB_ORIGIN`, so it points at the Next proxy. Configure an explicit trusted URL for deployment. Failure clears the attempt and normally redirects to `/?error=login_failed`.
 
-## Opaque application session
+## Opaque renewal session
 
-Session creation generates a random 32-byte token. PostgreSQL stores its SHA-256 hash in `AuthSession`, along with user ID, one-hour expiry, and nullable revocation time. The encrypted HttpOnly `app_session` cookie contains the raw token and expiry. It contains no role or permission claims.
+Session creation generates a random 32-byte token. PostgreSQL stores its SHA-256 hash in `AuthSession` with user ID, one-hour expiry, and nullable revocation time. The encrypted HttpOnly `app_session` cookie contains the raw token and expiry, not role or permission claims. The session is checked on refresh and logout; its expiry is not extended by refresh.
 
-For each BFF exchange, Nest decrypts the cookie, checks expiry, hashes the token, finds an active session, and loads current user, role permissions, and store assignments. The opaque session can obtain new short-lived access JWTs until its one-hour expiry; this does not extend the session itself. A role/assignment edit appears at the next BFF exchange.
+`POST /auth/refresh` requires the configured web Origin and a valid application session. Nest reloads role permissions and assignments, rebuilds the typed grant matrix, signs a fresh access token, and returns a new HttpOnly cookie. Concurrent refresh requests may issue multiple valid snapshots; the browser keeps the last response. The client fetch helper coalesces refreshes within one page instance and retries the original 401 request once.
 
-## Access JWT
+## Short-lived authorization token
 
-`POST /auth/access-token` is an internal BFF exchange. It requires the opaque cookie plus a server-only exchange key derived from `AUTH_COOKIE_SECRET`. No valid key means denial before session lookup. Its response is `Cache-Control: no-store` and contains a 60-second HS256 JWT with subject, session hash, tenant, region, permissions, store IDs, role, customer ID, and refund limit. Signing uses a purpose-separated derived key. The JWT is returned only to the Next server, never to browser JavaScript.
+The separate `access_token` cookie contains a ten-minute HS256 JWT. It signs the subject, tenant, assigned store IDs, role, and [typed permission grants](04-authorization-and-capabilities.md). Next and Nest both verify the signature, issuer, audience, expiry, and grant shape using the shared runtime-independent package. Next only checks named permission; Nest resolves resource scope into database predicates and reads current region, customer mapping, and refund limit. A direct cookie-only Nest retail/order request is rejected.
 
-[Next's BFF](../apps/web/app/api/bff/[...path]/route.ts) verifies the JWT and checks the shared `can()` policy before forwarding a protected request. [Nest's AccessTokenService](../apps/api/src/auth/access-token.service.ts) verifies the JWT independently and looks up the referenced session hash again. It rejects an expired or revoked session even if the JWT has time remaining. Controllers/services reapply authorization; domain queries check ownership and mutable state.
+`AUTH_JWT_SECRET` must be independent from the at-least-32-byte `AUTH_COOKIE_SECRET`. Both server processes need the JWT secret; browser JavaScript receives neither secret nor token. HS256 means Next also possesses signing material. Asymmetric signing and key rotation are future production improvements.
 
-A direct bearer token is a short-lived authorization snapshot. If permissions are removed without revoking the session, an already issued direct token may retain its old grants until its 60-second expiry. Normal browser requests exchange afresh each time. A direct cookie-only request to a protected Nest route is rejected. Neither revocation nor token expiry cancels work that already passed its check.
+## Logout, revocation, and stale access
 
-## Cookie encryption, origin, and logout
+`POST /auth/logout` and `/auth/logout-all` pass through Next, revoke the current or all applicable database sessions, clear both cookies, and redirect with 303. A missing or invalid session causes no database revocation but still clears the browser cookies. A copied opaque session cannot renew after revocation.
 
-[auth.crypto.ts](../apps/api/src/auth/auth.crypto.ts) uses AES-256-GCM with a random IV and authentication tag. Cookies are HttpOnly, SameSite=Lax, and Path=/; Secure is added in production. They are host scoped, so local ports on the same hostname share the cookie domain. `AUTH_COOKIE_SECRET` must decode to at least 32 random bytes. Replacing it invalidates existing cookies/JWTs; key rotation with overlapping keys is not implemented.
+A copied access JWT can remain valid until its ten-minute expiry even after logout or a role/assignment change. Nest does not query `AuthSession` during ordinary domain requests. It does load current user domain attributes and rejects a tenant change. Revocation does not cancel a request that has already passed its check. Use a session/version lookup or token denylist if immediate access-token invalidation is required.
 
-Browser writes to the BFF require the configured web Origin. Nest also requires the trusted Origin for retail/order writes and logout. Nest no longer enables credentialed browser CORS. `POST /auth/logout` and `/auth/logout-all` run through Next, revoke the current or all applicable database sessions, clear `app_session`, and redirect with 303. A missing/invalid cookie causes no database revocation but still clears the browser cookie.
+The cookies are HttpOnly, SameSite=Lax, host scoped, and Secure in production. [auth.crypto.ts](../apps/api/src/auth/auth.crypto.ts) uses AES-256-GCM for the attempt and session cookies. Browser writes to the BFF and Nest mutations require the trusted Origin; credentialed browser CORS is not enabled.
 
-Expired and revoked rows have no cleanup worker. The mock consumed-code map is process-local. The callback's internal fetch has no explicit timeout or runtime validation of the mock token response. No real provider credentials, discovery, signed provider-token verification, account linking, provider logout, refresh-token flow, key rotation, or device management exist. See [risks](10-risks-and-limitations.md).
+Expired/revoked session rows have no cleanup worker. Mock code replay protection is process-local, and the callback's internal fetch has no explicit timeout or runtime validation of the mock token response. Real provider discovery, signature validation, account linking, provider logout, and key rotation remain unimplemented. See [risks](10-risks-and-limitations.md).

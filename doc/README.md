@@ -1,6 +1,6 @@
 # Project documentation
 
-This documentation describes **Branch & Co**, the multi-branch retail and authorization demonstration implemented in this repository. It was checked against the source on **2026-10-09**. It describes the implementation, not a production certification. Proposed changes are explicitly separated from existing behavior.
+This documentation describes **Branch & Co**, the multi-branch retail and authorization demonstration implemented in this repository. It was checked against the source on **2026-10-16**. It describes the implementation, not a production certification. Proposed changes are explicitly separated from existing behavior.
 
 ## Reading paths
 
@@ -15,7 +15,7 @@ This documentation describes **Branch & Co**, the multi-branch retail and author
 1. [Project overview](01-project-overview.md): purpose, personas, implemented scope, seed data, and reference-document differences.
 2. [Architecture and principles](02-architecture-and-principles.md): workspace responsibilities, runtime boundaries, source-of-truth decisions, and request flow.
 3. [Authentication and sessions](03-authentication-and-sessions.md): mock authorization-code exchange, state, PKCE, cookies, session storage, and logout.
-4. [Authorization and capabilities](04-authorization-and-capabilities.md): role grants, tenant/branch constraints, shared refund policy, and UI override.
+4. [Authorization and capabilities](04-authorization-and-capabilities.md): typed conditional grants, query-scope enforcement, resource capabilities, and UI override.
 5. [Retail workflows](05-retail-workflows.md): dashboard, sales, stock changes, state transitions, concurrency, and rollback.
 6. [Database schema](06-database-schema.md): all 14 models, fields, relationships, constraints, migrations, and missing domain entities.
 7. [API reference](07-api-reference.md): routes, request bodies, response shapes, permissions, and error semantics.

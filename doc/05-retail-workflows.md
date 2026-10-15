@@ -6,7 +6,7 @@ The principal implementation is [RetailService](../apps/api/src/retail/retail.se
 
 ## Opening the workspace
 
-`GET /api/bff/retail` exchanges the session for a JWT, checks `store.read` in Next and Nest, and selects only assigned stores in the actor's tenant and region. Each store contains its branch-product listings with catalog details, latest 50 orders with items, and latest 15 audit events. A second batched query computes refund capabilities.
+`GET /api/bff/retail` verifies the access JWT and named `store.read` grant in Next and Nest, then uses grant-derived tenant/store predicates plus current region to select branches. Each store contains its branch-product listings with catalog details, latest 50 orders with items, and latest 15 audit events. A second batched query computes refund capabilities.
 
 Money is converted from Prisma Decimal to JSON numbers; timestamps serialize as strings. The dashboard response includes the actor and permissions. Store/product lists are not paginated. The included orders and capability query are separate reads, so they are not guaranteed to represent one database snapshot. Execution-time checks remain necessary.
 
@@ -18,7 +18,7 @@ The client sends only a branch-product ID and quantity:
 { "storeProductId": "10-coffee", "quantity": 2 }
 ```
 
-Next and Nest check the trusted origin. Next exchanges the opaque cookie and checks `order.create`; Nest verifies the bearer JWT and active session. The DTO requires a product ID of 1–100 characters and integer quantity 1–1000. The service requires `order.create` and opens a transaction:
+Next and Nest check the trusted origin. Next checks the signed `order.create` grant; Nest verifies the bearer JWT and derives tenant/store query scope. The DTO requires a product ID of 1–100 characters and integer quantity 1–1000. The service requires `order.create` and opens a transaction:
 
 1. Find the branch-product in an authorized store, with `isAvailable = true`, and an active product belonging to the tenant.
 2. Read price and product name from the database.
@@ -83,7 +83,7 @@ This operation has no payment-provider call, refund record, reason, amount, part
 - **Application rules:** tenant/region consistency, assigned branch, role grants, sale total calculation, and the order state machine.
 - **Not enforced globally:** total equals the sum of items; every order has items; stock equals movement sum; tenant consistency across related records; append-only audit history.
 
-Legacy seeded orders intentionally demonstrate some of these differences. Administrative SQL or new writers must preserve application invariants explicitly. JWT/session verification also precedes the service transaction, so an already-running request may finish after a grant is revoked.
+Legacy seeded orders intentionally demonstrate some of these differences. Administrative SQL or new writers must preserve application invariants explicitly. JWT verification precedes the service transaction, so an already-running request may finish after a grant is revoked; a copied JWT can remain valid until its ten-minute expiry.
 
 ## Failure and recovery
 
